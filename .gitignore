@@ -1,5 +1,7 @@
-# Virtual Environment
+# Virtual environments
 .venv/
+venv/
+env/
 
 # Python
 __pycache__/
@@ -11,13 +13,20 @@ db.sqlite3
 media/
 staticfiles/
 
-# Environment variables
+# Environment variables and secrets
 .env
+.env.local
+.env.*.local
+
+# PostgreSQL dumps and backups
+*.sql
+*.dump
+*.backup
 
 # IDEs
 .vscode/
 .idea/
 
-# OS
+# Operating systems
 .DS_Store
 Thumbs.db
