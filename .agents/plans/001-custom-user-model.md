@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: APPROVED
+- Status: BLOCKED
 - Related issue: N/A
 - Owner: Abdelrahman Atef
 - Reviewer: Arwa Mahmoud
@@ -272,3 +272,5 @@ Complete this section after implementation:
 - Security checks: Static inspection confirmed the approved role choices, default OWNER role, unique required email field, Django password-hashing integration, and the authentication_user_valid_role CheckConstraint. Runtime database-backed security tests remain BLOCKED until PostgreSQL is configured.
 - Remaining risks: Database-backed behavior remains unverified until the PostgreSQL environment is configured and the complete test suite passes. The written tests have not yet been executed.
 - Deviations from plan: None.
+- Blocker: PostgreSQL environment configuration and database-backed
+  test execution.
