@@ -2,13 +2,14 @@
 
 ## Metadata
 
-- Status: DRAFT
+- Status: APPROVED
 - Related issue: N/A
 - Owner: Abdelrahman Atef
 - Reviewer: Arwa Mahmoud
 - Branch: feature/custom-user
 - Created: 2026-09-24
 - Last updated: 2026-09-24
+
 ## Objective
 
 Define and justify the implementation of the CARVIX custom Django `User` model inside the existing `apps/authentication` application, satisfying the approved SRS v1.0 `User` entity exactly:
@@ -251,11 +252,13 @@ None. All material decisions — number of roles, role names and stored values, 
 
 ## Approval
 
-- Decision: PENDING
-- Approved by: <name>
-- Approval date: <YYYY-MM-DD>
+- Decision: APPROVED
+- Approved by: Abdelrahman Atef
+- Approval date: 2026-09-24
 
 Implementation must not begin while Status is `DRAFT` or Decision is `PENDING`.
+- Approval note: Self-approved by the task owner due to the project
+schedule. Teammate review remains required before merge.
 
 ## Implementation Report
 
