@@ -11,6 +11,7 @@ from unittest import skipIf
 
 from django.test import Client, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
+from django.utils.formats import date_format
 from django.utils import timezone
 
 from apps.appointments.models import Appointment, ServiceSlot
@@ -321,6 +322,16 @@ class VehicleWorkflowTests(TestCase):
         self.assertContains(response, "Next due date")
         self.assertContains(response, "Mileage: DUE")
         self.assertContains(response, "Date: DUE")
+        self.assertContains(
+            response,
+            f"Last service: {date_format(record.service_date, 'DATE_FORMAT')} at "
+            f"{record.mileage_at_service} km",
+        )
+        self.assertContains(response, "Next due mileage: 6000 km")
+        self.assertContains(
+            response,
+            f"Next due date: {date_format(result.next_due_date, 'DATE_FORMAT')}",
+        )
 
     def test_vehicle_detail_shows_no_history_for_each_service_type(self):
         ServiceType.objects.create(
@@ -337,6 +348,10 @@ class VehicleWorkflowTests(TestCase):
         self.assertContains(response, "No maintenance history is recorded for this vehicle.")
         self.assertContains(response, "NO_HISTORY")
         self.assertContains(response, "No recorded maintenance history is available for this service.")
+        self.assertContains(response, "No service has been recorded for this service.", count=1)
+        self.assertNotContains(response, "Last service: None")
+        self.assertNotContains(response, "Next due mileage: None")
+        self.assertNotContains(response, "Next due date: None")
 
     def test_vehicle_detail_excludes_another_vehicles_and_owners_history(self):
         own_record = self.make_maintenance_record(

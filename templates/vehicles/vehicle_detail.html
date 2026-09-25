@@ -59,9 +59,7 @@
                         <p>Next due mileage: {{ result.next_due_mileage }} km</p>
                         <p>Next due date: {{ result.next_due_date }}</p>
                     {% else %}
-                        <p>Last service: None</p>
-                        <p>Next due mileage: None</p>
-                        <p>Next due date: None</p>
+                        <p>No service has been recorded for this service.</p>
                     {% endif %}
                     <p>Reason: {{ result.reason }}</p>
                 </li>

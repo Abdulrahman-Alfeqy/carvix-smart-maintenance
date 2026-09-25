@@ -348,6 +348,21 @@ class DueServiceEvaluationTests(MaintenanceFixtures):
         self.assertEqual(overview["due_services"][0].last_service, latest_tie)
         self.assertEqual(overview["due_services"][0].next_due_mileage, 5300)
 
+    def test_unsorted_records_select_latest_service_date_then_primary_key(self):
+        earlier = self.make_record(service_date=date(2026, 1, 1), mileage_at_service=100)
+        later_date = self.make_record(service_date=date(2026, 2, 1), mileage_at_service=200)
+        latest_tie = self.make_record(service_date=date(2026, 2, 1), mileage_at_service=300)
+
+        result = evaluate_due_services(
+            current_mileage=1000,
+            service_types=[self.service_type],
+            records=[earlier, latest_tie, later_date],
+            as_of=self.as_of,
+        )[0]
+
+        self.assertEqual(result.last_service, latest_tie)
+        self.assertEqual(result.next_due_mileage, 5300)
+
     def test_service_without_matching_history_remains_independent(self):
         other_service = ServiceType.objects.create(
             name="Brake service",
@@ -390,6 +405,14 @@ class DueServiceEvaluationTests(MaintenanceFixtures):
         self.assertEqual(add_calendar_months(date(2026, 12, 31), 2), date(2027, 2, 28))
 
     def test_overview_queries_once_per_collection_and_only_selected_vehicle_records(self):
+        no_history_service = ServiceType.objects.create(
+            name="Brake service",
+            description="Brakes",
+            interval_km=1000,
+            interval_months=3,
+            duration_minutes=30,
+            price=Decimal("10.00"),
+        )
         other_vehicle = Vehicle.objects.create(
             owner=self.owner,
             manufacturer="Honda",
@@ -398,13 +421,36 @@ class DueServiceEvaluationTests(MaintenanceFixtures):
             license_plate="MAINT-OTHER",
             current_mileage=50000,
         )
-        own_record = self.make_record()
-        other_record = self.make_record(vehicle=other_vehicle, mileage_at_service=40000)
+        other_appointment = Appointment.objects.create(
+            vehicle=other_vehicle,
+            service_type=self.service_type,
+            slot=self.slot,
+            technician=self.technician,
+        )
+        earlier = self.make_record(service_date=date(2026, 1, 1), mileage_at_service=1000)
+        later_date = self.make_record(service_date=date(2026, 2, 1), mileage_at_service=2000)
+        latest_tie = self.make_record(service_date=date(2026, 2, 1), mileage_at_service=3000)
+        other_record = self.make_record(
+            vehicle=other_vehicle,
+            appointment=other_appointment,
+            service_date=date(2026, 3, 1),
+            mileage_at_service=40000,
+        )
         with self.assertNumQueries(2):
             overview = get_vehicle_maintenance_overview(self.vehicle, as_of=self.as_of)
-        self.assertEqual(overview["history"], [own_record])
+            self.assertEqual(
+                [record.service_type.name for record in overview["history"]],
+                ["Oil service", "Oil service", "Oil service"],
+            )
+            self.assertEqual(
+                [record.technician.user.username for record in overview["history"]],
+                [self.tech_user.username] * 3,
+            )
+        self.assertEqual(overview["history"], [latest_tie, later_date, earlier])
         self.assertNotIn(other_record, overview["history"])
-        self.assertEqual(overview["due_services"][0].last_service, own_record)
+        due_by_name = {result.service_type.name: result for result in overview["due_services"]}
+        self.assertEqual(due_by_name["Oil service"].last_service, latest_tie)
+        self.assertEqual(due_by_name["Brake service"].status, "NO_HISTORY")
 
 
 class MaintenancePartTests(MaintenanceFixtures):

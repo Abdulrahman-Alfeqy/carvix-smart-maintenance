@@ -40,7 +40,12 @@ def evaluate_due_services(
     """Purely evaluate prepared, Vehicle-scoped records against service intervals."""
     latest_by_service: dict[int, MaintenanceRecord] = {}
     for record in records:
-        latest_by_service.setdefault(record.service_type_id, record)
+        current_latest = latest_by_service.get(record.service_type_id)
+        if current_latest is None or (record.service_date, record.pk) > (
+            current_latest.service_date,
+            current_latest.pk,
+        ):
+            latest_by_service[record.service_type_id] = record
 
     results = []
     for service_type in service_types:
