@@ -1,4 +1,4 @@
-from django.test import TestCase, TransactionTestCase
+from django.test import Client, TestCase, TransactionTestCase
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
@@ -213,6 +213,17 @@ class RegistrationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFormError(response.context["form"], "email", "A user with that email already exists.")
 
+    def test_registration_rejects_case_insensitive_duplicate_email(self):
+        User.objects.create_user(username="user1", email="duplicate@example.com", password="password123")
+        response = self.client.post(reverse("authentication:register"), {
+            "username": "user2",
+            "email": "DUPLICATE@EXAMPLE.COM",
+            "password1": "ComplexPass123!",
+            "password2": "ComplexPass123!",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertFormError(response.context["form"], "email", "A user with that email already exists.")
+
     def test_password_mismatch_rejected(self):
         response = self.client.post(reverse("authentication:register"), {
             "username": "mismatchuser",
@@ -413,6 +424,16 @@ class ProfileTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFormError(response.context["form"], "email", "A user with that email already exists.")
 
+    def test_profile_edit_rejects_case_insensitive_duplicate_email(self):
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("authentication:profile_edit"), {
+            "email": "OTHER@EXAMPLE.COM",
+            "first_name": "Updated",
+            "last_name": "User",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertFormError(response.context["form"], "email", "A user with that email already exists.")
+
     def test_submitted_role_cannot_modify_stored_role(self):
         self.client.force_login(self.user)
         self.client.post(reverse("authentication:profile_edit"), {
@@ -467,6 +488,45 @@ class ProfileTests(TestCase):
         self.assertNotIn("username", form.fields)
         self.assertNotIn("groups", form.fields)
         self.assertNotIn("user_permissions", form.fields)
+
+
+class CsrfEnforcementTests(TestCase):
+    def test_registration_post_without_csrf_token_is_rejected(self):
+        client = Client(enforce_csrf_checks=True)
+        response = client.post(reverse("authentication:register"), {
+            "username": "csrfuser",
+            "email": "csrfuser@example.com",
+            "password1": "ComplexPass123!",
+            "password2": "ComplexPass123!",
+        })
+        self.assertEqual(response.status_code, 403)
+
+    def test_login_post_without_csrf_token_is_rejected(self):
+        User.objects.create_user(username="csrflogin", email="csrflogin@example.com", password="ComplexPass123!")
+        client = Client(enforce_csrf_checks=True)
+        response = client.post(reverse("authentication:login"), {
+            "username": "csrflogin",
+            "password": "ComplexPass123!",
+        })
+        self.assertEqual(response.status_code, 403)
+
+    def test_logout_post_without_csrf_token_is_rejected(self):
+        user = User.objects.create_user(username="csrflogout", email="csrflogout@example.com", password="ComplexPass123!")
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(user)
+        response = client.post(reverse("authentication:logout"))
+        self.assertEqual(response.status_code, 403)
+
+    def test_profile_edit_post_without_csrf_token_is_rejected(self):
+        user = User.objects.create_user(username="csrfprofile", email="csrfprofile@example.com", password="ComplexPass123!")
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(user)
+        response = client.post(reverse("authentication:profile_edit"), {
+            "email": "csrfprofile@example.com",
+            "first_name": "Updated",
+            "last_name": "User",
+        })
+        self.assertEqual(response.status_code, 403)
 
 
 def form_has_errors(response, field_name):

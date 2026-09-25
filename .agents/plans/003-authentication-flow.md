@@ -367,7 +367,7 @@ All new tests are database-backed Django test-client tests and must run against 
 
 ## Open Questions
 
-None blocking. The following decisions are recorded in this DRAFT:
+None blocking. The following decisions are recorded in this plan:
 
 - Username is not editable on the profile form.
 - `first_name` and `last_name` are optional on registration.
@@ -401,6 +401,14 @@ Implementation must not begin while Status is `DRAFT` or Decision is `PENDING`.
   - No User model change was made.
   - No migration was created or modified.
   - PostgreSQL remained the only test database.
+  - Verified PR review fixes:
+    - Registration duplicate-email validation now uses a case-insensitive lookup with `email__iexact`.
+    - Profile-edit duplicate-email validation now uses a case-insensitive lookup with `email__iexact`, while excluding the current user's primary key.
+    - Two case-insensitive email tests were added: `test_registration_rejects_case_insensitive_duplicate_email` and `test_profile_edit_rejects_case_insensitive_duplicate_email`.
+    - Four CSRF-enforced tests were added using `Client(enforce_csrf_checks=True)`: `test_registration_post_without_csrf_token_is_rejected`, `test_login_post_without_csrf_token_is_rejected`, `test_logout_post_without_csrf_token_is_rejected`, and `test_profile_edit_post_without_csrf_token_is_rejected`.
+    - The stale phrase `this DRAFT` was corrected to `this plan`.
+    - No CSRF context processor was added. Django generic and contrib views use RequestContext, CSRF middleware remains enabled, and the form templates contain csrf_token tags. Runtime CSRF rejection is now explicitly tested.
+    - No model or migration was changed or created.
 - Files changed:
   - Created: `apps/authentication/forms.py`
   - Created: `apps/authentication/urls.py`
@@ -425,10 +433,9 @@ Implementation must not begin while Status is `DRAFT` or Decision is `PENDING`.
   - `python manage.py check`: `System check identified no issues (0 silenced).`
   - `python manage.py makemigrations --check`: `No changes detected`
   - Focused failing-test verification: found 1 test, ran 1 test, passed.
-  - Authentication flow test categories: found 41 tests, ran 41 tests, all passed.
-  - Complete authentication application suite: found 59 tests, ran 59 tests, all 59 passed. PostgreSQL test database `test_carvix_db` was created, migrations were applied to the test database, and the test database was destroyed successfully.
-  - Complete available project suite: found 59 tests, ran 59 tests, all 59 passed. PostgreSQL test database was created and destroyed successfully.
-  - Test accounting: existing tests retained: 18; new authentication-flow tests added: 41; total available tests: 59; total passing tests: 59.
+  - `python manage.py test apps.authentication -v 2`: found 65 tests, ran 65 tests, all 65 passed. PostgreSQL test database `test_carvix_db` was created, migrations were applied, and the test database was destroyed successfully.
+  - `python manage.py test -v 2`: found 65 tests, ran 65 tests, all 65 passed. Complete available project suite passed. PostgreSQL test database was created and destroyed successfully.
+  - Final test accounting: existing tests retained: 18; authentication-flow tests before review fixes: 41; review-fix tests added: 6; total new authentication-flow and review-fix tests: 47; total available tests: 65; total passing tests: 65.
 - Migration/environment changes:
   - No User model change was made.
   - No migration was created or modified.
@@ -447,15 +454,23 @@ Implementation must not begin while Status is `DRAFT` or Decision is `PENDING`.
   - Unsafe external redirects are rejected.
   - No secrets or credentials were added.
   - No SQLite fallback was introduced.
+  - Browser state-changing endpoints reject POST requests without a valid CSRF token.
+  - Registration, login, logout, and profile-edit CSRF rejection are covered by CSRF-enforced tests.
+  - Duplicate-email validation is case-insensitive for registration and profile editing.
+  - No CSRF context processor setting change was required.
+  - No secrets were added.
+  - No SQLite fallback was introduced.
 - Remaining risks:
   - Complete RBAC endpoint enforcement remains a separate future task.
   - Role-specific dashboards remain a separate future task.
   - Password reset, password change, and email verification remain outside this task.
   - No blocker remains for the approved Authentication Flow task.
 - Deviations from plan:
-  - The implementation originally reported 44 new tests, but the verified count is 41 new tests and 59 total tests.
+  - The implementation initially misreported 44 tests. The verified count before PR review fixes was 41 new tests and 59 total tests.
+  - PR review fixes added 6 tests (2 case-insensitive email tests and 4 CSRF-enforced tests). The final verified count after PR review fixes is 47 new tests, 65 total tests, and 65 passing tests.
   - Five tests initially used an outdated assertFormError calling style and were corrected for Django 6.1.
   - The password-mismatch test was changed to assert the stable `password_mismatch` error code instead of punctuation-sensitive English text.
   - Unused imports were removed.
   - Missing final newlines were added.
+  - The stale Open Questions phrase `this DRAFT` was corrected to `this plan`.
   - These are test and formatting corrections, not deviations from the approved functional design.

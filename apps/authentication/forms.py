@@ -14,7 +14,7 @@ class RegistrationForm(UserCreationForm):
 
     def clean_email(self):
         email = self.cleaned_data["email"].lower()
-        if User.objects.filter(email=email).exists():
+        if User.objects.filter(email__iexact=email).exists():
             raise forms.ValidationError("A user with that email already exists.")
         return email
 
@@ -38,6 +38,6 @@ class ProfileEditForm(forms.ModelForm):
 
     def clean_email(self):
         email = self.cleaned_data["email"].lower()
-        if User.objects.exclude(pk=self.instance.pk).filter(email=email).exists():
+        if User.objects.exclude(pk=self.instance.pk).filter(email__iexact=email).exists():
             raise forms.ValidationError("A user with that email already exists.")
         return email
