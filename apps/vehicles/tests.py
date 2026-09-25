@@ -1,10 +1,11 @@
+from html.parser import HTMLParser
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
 from django.db.models.deletion import ProtectedError
 from unittest import skipIf
 
-from django.test import Client, TestCase, TransactionTestCase
+from django.test import Client, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 
 from .forms import VehicleForm
@@ -393,6 +394,20 @@ class VehicleWorkflowTests(TestCase):
                 self.assertNotContains(response, "Vehicles</a>")
 
 
+class _CsrfInputParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.token = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "input":
+            return
+        attributes = dict(attrs)
+        if attributes.get("type") == "hidden" and attributes.get("name") == "csrfmiddlewaretoken":
+            self.token = attributes.get("value")
+
+
+@override_settings(ALLOWED_HOSTS=["testserver"])
 class VehicleWorkflowCsrfTests(TestCase):
     def setUp(self):
         self.owner = User.objects.create_user(
@@ -421,6 +436,14 @@ class VehicleWorkflowCsrfTests(TestCase):
             "current_mileage": "25000",
         }
 
+    def rendered_csrf_token(self, response):
+        parser = _CsrfInputParser()
+        parser.feed(response.content.decode(response.charset))
+        self.assertTrue(parser.token)
+        self.assertIn("csrftoken", response.cookies)
+        self.assertTrue(response.cookies["csrftoken"].value)
+        return parser.token
+
     def test_create_post_without_csrf_token_is_rejected(self):
         response = self.client.post(reverse("vehicles:vehicle-create"), self.valid_data("CSRF-2"))
         self.assertEqual(response.status_code, 403)
@@ -431,3 +454,40 @@ class VehicleWorkflowCsrfTests(TestCase):
             self.valid_data("CSRF-UPDATED"),
         )
         self.assertEqual(response.status_code, 403)
+
+    def test_create_csrf_round_trip_accepts_rendered_token(self):
+        create_url = reverse("vehicles:vehicle-create")
+        get_response = self.client.get(create_url)
+        self.assertEqual(get_response.status_code, 200)
+        token = self.rendered_csrf_token(get_response)
+        data = self.valid_data("CSRF-CREATE")
+        data["csrfmiddlewaretoken"] = token
+
+        response = self.client.post(
+            create_url,
+            data,
+        )
+        self.assertNotEqual(response.status_code, 403)
+        self.assertRedirects(response, reverse("vehicles:vehicle-list"))
+        created = Vehicle.objects.get(license_plate="CSRF-CREATE")
+        self.assertEqual(created.owner, self.owner)
+
+    def test_update_csrf_round_trip_accepts_rendered_token(self):
+        update_url = reverse("vehicles:vehicle-update", args=[self.vehicle.pk])
+        get_response = self.client.get(update_url)
+        self.assertEqual(get_response.status_code, 200)
+        token = self.rendered_csrf_token(get_response)
+        data = self.valid_data("CSRF-UPDATED")
+        data["csrfmiddlewaretoken"] = token
+
+        response = self.client.post(
+            update_url,
+            data,
+        )
+        self.assertNotEqual(response.status_code, 403)
+        self.assertRedirects(response, reverse("vehicles:vehicle-list"))
+        self.vehicle.refresh_from_db()
+        self.assertEqual(self.vehicle.license_plate, "CSRF-UPDATED")
+        self.assertEqual(self.vehicle.manufacturer, "Mazda")
+        self.assertEqual(self.vehicle.current_mileage, 25000)
+        self.assertEqual(self.vehicle.owner, self.owner)
