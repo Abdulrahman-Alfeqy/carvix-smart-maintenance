@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Profile - CARVIX{% endblock %}
+
+{% block content %}
+<h1>Profile</h1>
+
+<div>
+    <p><strong>Username:</strong> {{ user.username }}</p>
+    <p><strong>Email:</strong> {{ user.email }}</p>
+    <p><strong>First Name:</strong> {{ user.first_name|default:"-" }}</p>
+    <p><strong>Last Name:</strong> {{ user.last_name|default:"-" }}</p>
+    <p><strong>Role:</strong> {{ user.get_role_display }}</p>
+</div>
+
+<a href="{% url 'authentication:profile_edit' %}">Edit Profile</a>
+{% endblock %}

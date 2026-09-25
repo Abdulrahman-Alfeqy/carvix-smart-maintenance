@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Login - CARVIX{% endblock %}
+
+{% block content %}
+<h1>Login</h1>
+
+<form method="post">
+    {% csrf_token %}
+
+    {% if form.non_field_errors %}
+        <div class="errors">
+            {% for error in form.non_field_errors %}
+                <div class="error">{{ error }}</div>
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    <div>
+        <label for="{{ form.username.id_for_label }}">Username:</label>
+        {{ form.username }}
+        {% if form.username.errors %}
+            <div class="errors">
+                {% for error in form.username.errors %}
+                    <div class="error">{{ error }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    </div>
+
+    <div>
+        <label for="{{ form.password.id_for_label }}">Password:</label>
+        {{ form.password }}
+        {% if form.password.errors %}
+            <div class="errors">
+                {% for error in form.password.errors %}
+                    <div class="error">{{ error }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    </div>
+
+    <input type="hidden" name="next" value="{{ request.GET.next|default:'' }}">
+
+    <button type="submit">Login</button>
+</form>
+
+<p>Don't have an account? <a href="{% url 'authentication:register' %}">Register</a></p>
+{% endblock %}

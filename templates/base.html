@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}CARVIX{% endblock %}</title>
+</head>
+<body>
+    <header>
+        <nav>
+            <a href="{% url 'authentication:profile' %}">CARVIX</a>
+            {% if user.is_authenticated %}
+                <span>{{ user.username }} ({{ user.get_role_display }})</span>
+                <form method="post" action="{% url 'authentication:logout' %}" style="display: inline;">
+                    {% csrf_token %}
+                    <button type="submit">Logout</button>
+                </form>
+                <a href="{% url 'authentication:profile_edit' %}">Edit Profile</a>
+            {% else %}
+                <a href="{% url 'authentication:login' %}">Login</a>
+                <a href="{% url 'authentication:register' %}">Register</a>
+            {% endif %}
+        </nav>
+    </header>
+
+    <main>
+        {% if messages %}
+            <div class="messages">
+                {% for message in messages %}
+                    <div class="message {{ message.tags }}">{{ message }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {% block content %}
+        {% endblock %}
+    </main>
+</body>
+</html>
