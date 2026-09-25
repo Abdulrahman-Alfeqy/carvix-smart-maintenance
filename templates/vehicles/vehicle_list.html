@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Vehicles - CARVIX{% endblock %}
+
+{% block content %}
+<h1>Your Vehicles</h1>
+
+<p><a href="{% url 'vehicles:vehicle-create' %}">Add Vehicle</a></p>
+
+{% if vehicles %}
+    <ul>
+        {% for vehicle in vehicles %}
+            <li>
+                <a href="{% url 'vehicles:vehicle-detail' vehicle.pk %}">
+                    {{ vehicle.manufacturer }} {{ vehicle.model }} ({{ vehicle.license_plate }})
+                </a>
+            </li>
+        {% endfor %}
+    </ul>
+{% else %}
+    <p>You have not added any vehicles yet.</p>
+{% endif %}
+{% endblock %}
