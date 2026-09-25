@@ -16,4 +16,57 @@
 
 <p><a href="{% url 'vehicles:vehicle-update' vehicle.pk %}">Update Vehicle</a></p>
 <p><a href="{% url 'vehicles:vehicle-list' %}">Back to Vehicles</a></p>
+
+<section aria-labelledby="maintenance-history-heading">
+    <h2 id="maintenance-history-heading">Maintenance History</h2>
+    {% if maintenance_history %}
+        <ul>
+            {% for record in maintenance_history %}
+                <li>
+                    <h3>{{ record.service_type.name }}</h3>
+                    <dl>
+                        <dt>Service date</dt>
+                        <dd>{{ record.service_date }}</dd>
+                        <dt>Mileage at service</dt>
+                        <dd>{{ record.mileage_at_service }}</dd>
+                        {% if record.technician_id %}
+                            <dt>Technician</dt>
+                            <dd>{{ record.technician.user.username }}</dd>
+                        {% endif %}
+                        {% if record.notes %}
+                            <dt>Notes</dt>
+                            <dd>{{ record.notes }}</dd>
+                        {% endif %}
+                    </dl>
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>No maintenance history is recorded for this vehicle.</p>
+    {% endif %}
+</section>
+
+<section aria-labelledby="due-service-heading">
+    <h2 id="due-service-heading">Due-Service Overview</h2>
+    {% if due_services %}
+        <ul>
+            {% for result in due_services %}
+                <li>
+                    <h3>{{ result.service_type.name }}</h3>
+                    <p>Status: {{ result.status }}</p>
+                    {% if result.last_service %}
+                        <p>Last service: {{ result.last_service.service_date }} at {{ result.last_service.mileage_at_service }} km</p>
+                        <p>Next due mileage: {{ result.next_due_mileage }} km</p>
+                        <p>Next due date: {{ result.next_due_date }}</p>
+                    {% else %}
+                        <p>No service has been recorded for this service.</p>
+                    {% endif %}
+                    <p>Reason: {{ result.reason }}</p>
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>No service types are configured.</p>
+    {% endif %}
+</section>
 {% endblock %}
