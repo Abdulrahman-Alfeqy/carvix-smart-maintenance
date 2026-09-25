@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: APPROVED
+- Status: IMPLEMENTED
 - Related issue: N/A
 - Owner: Arwa
 - Reviewer: Abdalrahaman Atef
@@ -120,11 +120,17 @@ Implementation must not begin while Status is `DRAFT` or Decision is `PENDING`.
 
 ## Implementation Report
 
-- Summary:
-- Files changed:
+- Summary: Implemented the Owner Vehicle list, creation, detail, and update workflow with authentication and OWNER-role enforcement; server-bound ownership; owner-scoped retrieval; namespaced URLs; minimal templates; Owner-only navigation; CSRF protection; and field-specific plate and mileage validation. No state mutation occurs through GET.
+- Files created: `apps/vehicles/forms.py`, `apps/vehicles/views.py`, `apps/vehicles/urls.py`, `templates/vehicles/vehicle_list.html`, `templates/vehicles/vehicle_detail.html`, `templates/vehicles/vehicle_form.html`.
+- Files changed: `apps/vehicles/tests.py`, `config/urls.py`, `templates/base.html`, `.agents/plans/005-owner-vehicle-workflow.md`.
 - Tests executed:
-- Test results:
-- Migration/environment changes:
-- Security checks:
-- Remaining risks:
-- Deviations from plan:
+  - `python manage.py test apps.vehicles -v 2` — 30 tests found; 30 passed; 0 failures; 0 errors. PostgreSQL test database created and destroyed successfully.
+  - `python manage.py test -v 2` — 140 tests found; 140 passed; 0 failures; 0 errors. PostgreSQL test database created and destroyed successfully.
+- Test results: `python manage.py check` passed with no issues. `git diff --check` passed with no whitespace errors.
+- Migration/environment changes: `python manage.py makemigrations --check` passed with no changes detected. Inspection confirmed `apps/vehicles/migrations/0001_initial.py` remains the only Vehicle migration; no migration was generated. No environment or dependency changes. No Vehicle model, authentication implementation, or settings changes. No Vehicle deletion, general RBAC, Administrator Vehicle management, maintenance history, appointments, inventory, dashboards, audit-log, or AI work was added.
+- Security checks: Anonymous requests redirect to login. OWNER users can access all four endpoints; TECHNICIAN and ADMINISTRATOR users receive 403. Domain-role checks do not use `is_staff` or `is_superuser`. Ownership comes only from `request.user`; owner and owner_id inputs have no effect. List results are owner-filtered; detail and update retrieval are owner-scoped before access. Cross-owner identifiers return 404, and unauthorized update POST has no side effect. Create GET creates no Vehicle; update GET changes no fields. Create/update POST require CSRF. Navigation visibility does not replace backend authorization. No deletion route, view, template, form, or action was added.
+- Form and validation checks: The ModelForm contains exactly `manufacturer`, `model`, `model_year`, `license_plate`, and `current_mileage`; `owner` and `created_at` are excluded. Duplicate normalized case-insensitive plates produce a `license_plate` field error; update validation excludes the current instance. Negative mileage produces a `current_mileage` field error, required fields produce field-specific errors, and Arabic characters, digits, and meaningful internal separators are preserved. No model-year range was added. The existing PostgreSQL constraint remains the final uniqueness invariant.
+- Independent review: APPROVABLE. No BLOCKER, HIGH, or MEDIUM findings. One LOW non-blocking note: list/detail GET tests do not explicitly compare database state before and after requests. No code change was required because the reviewed generic list and detail views contain no mutation path.
+- Remaining risks: General project-wide RBAC, Administrator Vehicle management, Vehicle deletion, maintenance history, and due-service calculation remain separate future workflows. Vehicle deletion requires a separately approved policy if introduced.
+- Deviations from plan: No implementation scope deviation. PostgreSQL was temporarily unavailable during the first validation attempt; after it became available, all focused and complete tests passed. No code or scope change was needed because of the temporary interruption.
+- Final result: Implementation, validation, and independent review are complete. No blocking issue remains; ready for final human diff review, commit, push, and Pull Request.

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}{% if form.instance.pk %}Update Vehicle{% else %}Add Vehicle{% endif %} - CARVIX{% endblock %}
+
+{% block content %}
+<h1>{% if form.instance.pk %}Update Vehicle{% else %}Add Vehicle{% endif %}</h1>
+
+<form method="post">
+    {% csrf_token %}
+
+    {% if form.non_field_errors %}
+        <div class="errors">
+            {% for error in form.non_field_errors %}
+                <div class="error">{{ error }}</div>
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    {% for field in form %}
+        <div>
+            <label for="{{ field.id_for_label }}">{{ field.label }}:</label>
+            {{ field }}
+            {% if field.errors %}
+                <div class="errors">
+                    {% for error in field.errors %}
+                        <div class="error">{{ error }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </div>
+    {% endfor %}
+
+    <button type="submit">Save Vehicle</button>
+</form>
+
+<p><a href="{% url 'vehicles:vehicle-list' %}">Back to Vehicles</a></p>
+{% endblock %}
