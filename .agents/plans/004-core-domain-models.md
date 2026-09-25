@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: APPROVED
+- Status: IMPLEMENTED
 - Related issue: N/A
 - Owner: Arwa
 - Reviewer: Abdalrahaman Atef
@@ -505,13 +505,13 @@ The plan is approved for implementation. Implementation must remain within the a
 
 ## Implementation Report
 
-Complete this section after implementation:
-
-- Summary:
-- Files changed:
-- Tests executed:
-- Test results:
-- Migration/environment changes:
-- Security checks:
-- Remaining risks:
-- Deviations from plan:
+- **Summary:** Implemented the eight approved core domain models and fields from SRS Table 11 in their approved applications: `Vehicle` (`apps.vehicles`); `TechnicianProfile`, `ServiceType`, `MaintenanceRecord`, and `MaintenancePart` (`apps.maintenance`); `ServiceSlot` and `Appointment` (`apps.appointments`); and `SparePart` (`apps.inventory`). Added the approved relationships, `PROTECT` deletion behavior, related names, ordering and string representations, text and license-plate normalization, case-insensitive PostgreSQL plate uniqueness, appointment status choices, partial uniqueness for active duplicate bookings, named constraints and indexes, model validation, minimal Django Admin registration, and the application settings entries. `AgentActionLog` remains deferred to its dedicated task in `apps.ai_agent`.
+- **Files changed:** Added the four app packages and their model, admin, test, and migration files; updated `config/settings.py` to register the apps; and updated this plan report. No unrelated files were changed.
+- **Tests executed:** `python manage.py check`; `python manage.py makemigrations --check`; `python manage.py test apps.vehicles apps.inventory apps.maintenance apps.appointments -v 2`; `python manage.py test -v 2`; and `git diff --check`. Migration application and `showmigrations` were also checked against PostgreSQL.
+- **Test results:** Django system check reported no issues; `makemigrations --check` reported no changes; all 53 core-domain tests passed; all 118 project tests passed with 0 failures and 0 skipped; `git diff --check` passed; and all listed migrations were applied. Tests used PostgreSQL, not SQLite.
+- **Migration/environment changes:** Generated and applied `apps/vehicles/migrations/0001_initial.py`, `apps/inventory/migrations/0001_initial.py`, `apps/appointments/migrations/0001_initial.py`, `apps/maintenance/migrations/0001_initial.py`, and `apps/appointments/migrations/0002_initial.py`. The migrations use the swappable dependency for the custom User; the auth migration was unchanged. The resulting dependency/application order was `vehicles.0001_initial`, `inventory.0001_initial`, `appointments.0001_initial`, `maintenance.0001_initial`, then `appointments.0002_initial`. No environment variables or secrets were changed.
+- **Security checks:** `Vehicle.owner` and the listed domain relationships use `PROTECT`; ownership remains structurally represented by the vehicle relationship, while endpoint authorization and RBAC remain application responsibilities. Database constraints provide integrity checks but do not replace authorization. No secrets were added, and the deferred AI logging model was not introduced.
+- **Review fixes:** Four test modules initially failed to import because `skipIf` was imported from `django.test`; the imports were corrected to use Python's `unittest`, and the affected tests were rerun. A vehicle required-fields test also expected an owner error while supplying a valid owner; its expected field set was corrected. Both fixes were followed by the individual/core and full-suite runs recorded above and required no model or migration changes.
+- **Remaining risks:** Slot-capacity enforcement still requires transactional concurrency control; inventory quantity changes require atomic transaction handling; constraints do not replace endpoint authorization; and appointment status transitions remain part of a later workflow task.
+- **Deviations from plan:** Django generated a split migration sequence (`appointments.0001_initial`, `maintenance.0001_initial`, and `appointments.0002_initial`) rather than the anticipated possible second maintenance migration. Only migration filenames and dependency order differed; model semantics and approved decisions did not. Future vehicle CRUD, RBAC and ownership enforcement, manual booking and capacity handling, status transitions and cancellation, technician workflow, maintenance completion, atomic inventory deduction/restoration, role dashboards, `AgentActionLog`, and AI tools/chat/LLM remain outside this implementation phase.
+- **Result:** Implementation and required checks are complete with no blockers. The changes are ready for human diff review and pull-request preparation.
