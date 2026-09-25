@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -15,6 +15,11 @@ from apps.inventory.models import SparePart
 from apps.vehicles.models import Vehicle
 
 from .models import MaintenancePart, MaintenanceRecord, ServiceType, TechnicianProfile
+from .services import (
+    add_calendar_months,
+    evaluate_due_services,
+    get_vehicle_maintenance_overview,
+)
 
 
 User = get_user_model()
@@ -276,6 +281,130 @@ class MaintenanceRecordTests(MaintenanceFixtures):
             with self.subTest(related=related.__class__.__name__):
                 with self.assertRaises(ProtectedError):
                     related.delete()
+
+
+class DueServiceEvaluationTests(MaintenanceFixtures):
+    as_of = date(2026, 9, 25)
+    service_date = date(2026, 3, 25)
+
+    def evaluate(self, mileage=1000, record_mileage=1000, service_date=None, as_of=None, service=None):
+        service = service or self.service_type
+        record = self.make_record(
+            service_type=service,
+            service_date=service_date or self.service_date,
+            mileage_at_service=record_mileage,
+        )
+        return evaluate_due_services(
+            current_mileage=mileage,
+            service_types=[service],
+            records=[record],
+            as_of=as_of or self.as_of,
+        )[0]
+
+    def test_no_history_returns_no_thresholds_and_deterministic_reason(self):
+        result = evaluate_due_services(50000, [self.service_type], [], self.as_of)[0]
+        self.assertEqual(result.status, "NO_HISTORY")
+        self.assertIsNone(result.last_service)
+        self.assertIsNone(result.next_due_mileage)
+        self.assertIsNone(result.next_due_date)
+        self.assertEqual(
+            result.reason,
+            "No recorded maintenance history is available for this service.",
+        )
+
+    def test_mileage_boundaries(self):
+        before_due_date = date(2026, 9, 24)
+        self.assertEqual(self.evaluate(mileage=5999, as_of=before_due_date).status, "NOT_DUE")
+        self.assertEqual(self.evaluate(mileage=6000, as_of=before_due_date).status, "DUE")
+        self.assertEqual(self.evaluate(mileage=6001, as_of=before_due_date).status, "OVERDUE")
+
+    def test_date_boundaries(self):
+        self.assertEqual(self.evaluate(as_of=date(2026, 9, 24)).status, "NOT_DUE")
+        self.assertEqual(self.evaluate(as_of=date(2026, 9, 25)).status, "DUE")
+        self.assertEqual(self.evaluate(as_of=date(2026, 9, 26)).status, "OVERDUE")
+
+    def test_combined_status_precedence_and_ordered_reasons(self):
+        cases = (
+            (6000, date(2026, 9, 24), "DUE"),
+            (5999, date(2026, 9, 25), "DUE"),
+            (6001, date(2026, 9, 25), "OVERDUE"),
+            (6000, date(2026, 9, 26), "OVERDUE"),
+            (6001, date(2026, 9, 26), "OVERDUE"),
+        )
+        for mileage, as_of, expected in cases:
+            with self.subTest(mileage=mileage, as_of=as_of):
+                result = self.evaluate(mileage=mileage, as_of=as_of)
+                self.assertEqual(result.status, expected)
+                self.assertLess(result.reason.index("Mileage:"), result.reason.index("Date:"))
+                self.assertIn("next due 6000", result.reason)
+                self.assertIn("next due 2026-09-25", result.reason)
+
+    def test_latest_record_uses_service_date_then_primary_key(self):
+        earlier = self.make_record(service_date=date(2026, 1, 1), mileage_at_service=100)
+        later_date = self.make_record(service_date=date(2026, 2, 1), mileage_at_service=200)
+        latest_tie = self.make_record(service_date=date(2026, 2, 1), mileage_at_service=300)
+        overview = get_vehicle_maintenance_overview(self.vehicle, as_of=self.as_of)
+        self.assertEqual(overview["history"], [latest_tie, later_date, earlier])
+        self.assertEqual(overview["due_services"][0].last_service, latest_tie)
+        self.assertEqual(overview["due_services"][0].next_due_mileage, 5300)
+
+    def test_service_without_matching_history_remains_independent(self):
+        other_service = ServiceType.objects.create(
+            name="Brake service",
+            description="Brakes",
+            interval_km=1000,
+            interval_months=3,
+            duration_minutes=30,
+            price=Decimal("10.00"),
+        )
+        oil_record = self.make_record(service_date=date(2026, 3, 25))
+        overview = get_vehicle_maintenance_overview(self.vehicle, as_of=self.as_of)
+        by_name = {result.service_type.name: result for result in overview["due_services"]}
+        self.assertEqual(by_name["Oil service"].status, "DUE")
+        self.assertEqual(by_name["Oil service"].last_service, oil_record)
+        self.assertEqual(by_name["Brake service"].status, "NO_HISTORY")
+
+    def test_inconsistent_mileage_does_not_override_date_or_mutate_records(self):
+        record = self.make_record(
+            service_date=self.service_date,
+            mileage_at_service=5000,
+        )
+        original = (record.service_date, record.mileage_at_service, record.notes)
+        result = evaluate_due_services(
+            current_mileage=1000,
+            service_types=[self.service_type],
+            records=[record],
+            as_of=date(2026, 9, 24),
+        )[0]
+        self.assertEqual(result.status, "NOT_DUE")
+        self.assertIn("Mileage: unavailable", result.reason)
+        self.assertIn("current 1000 is below latest service 5000", result.reason)
+        self.assertIn("Date: NOT_DUE", result.reason)
+        record.refresh_from_db()
+        self.assertEqual((record.service_date, record.mileage_at_service, record.notes), original)
+
+    def test_calendar_month_addition_clamps_and_rolls_over_year(self):
+        self.assertEqual(add_calendar_months(date(2026, 1, 15), 1), date(2026, 2, 15))
+        self.assertEqual(add_calendar_months(date(2024, 1, 31), 1), date(2024, 2, 29))
+        self.assertEqual(add_calendar_months(date(2025, 1, 31), 1), date(2025, 2, 28))
+        self.assertEqual(add_calendar_months(date(2026, 12, 31), 2), date(2027, 2, 28))
+
+    def test_overview_queries_once_per_collection_and_only_selected_vehicle_records(self):
+        other_vehicle = Vehicle.objects.create(
+            owner=self.owner,
+            manufacturer="Honda",
+            model="Civic",
+            model_year=2020,
+            license_plate="MAINT-OTHER",
+            current_mileage=50000,
+        )
+        own_record = self.make_record()
+        other_record = self.make_record(vehicle=other_vehicle, mileage_at_service=40000)
+        with self.assertNumQueries(2):
+            overview = get_vehicle_maintenance_overview(self.vehicle, as_of=self.as_of)
+        self.assertEqual(overview["history"], [own_record])
+        self.assertNotIn(other_record, overview["history"])
+        self.assertEqual(overview["due_services"][0].last_service, own_record)
 
 
 class MaintenancePartTests(MaintenanceFixtures):

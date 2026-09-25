@@ -1,4 +1,8 @@
 from html.parser import HTMLParser
+from datetime import date, timedelta
+from decimal import Decimal
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
@@ -7,6 +11,10 @@ from unittest import skipIf
 
 from django.test import Client, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
+
+from apps.appointments.models import Appointment, ServiceSlot
+from apps.maintenance.models import MaintenanceRecord, ServiceType, TechnicianProfile
 
 from .forms import VehicleForm
 from .models import Vehicle
@@ -176,6 +184,56 @@ class VehicleWorkflowTests(TestCase):
             current_mileage=30000,
         )
 
+    def make_maintenance_record(
+        self,
+        vehicle,
+        name,
+        service_date,
+        mileage,
+        notes="",
+        technician_username="workflow-maintenance-tech",
+    ):
+        service_type = ServiceType.objects.create(
+            name=name,
+            description="Test maintenance service",
+            interval_km=5000,
+            interval_months=6,
+            duration_minutes=45,
+            price=Decimal("25.00"),
+        )
+        tech_user, _ = User.objects.get_or_create(
+            username=technician_username,
+            defaults={
+                "email": f"{technician_username}@example.com",
+                "role": User.Role.TECHNICIAN,
+            },
+        )
+        technician, _ = TechnicianProfile.objects.get_or_create(
+            user=tech_user,
+            defaults={"specialization": "General service"},
+        )
+        start = timezone.now() + timedelta(days=1)
+        slot = ServiceSlot.objects.create(
+            start_time=start,
+            end_time=start + timedelta(minutes=45),
+            capacity=1,
+        )
+        appointment = Appointment.objects.create(
+            vehicle=vehicle,
+            service_type=service_type,
+            slot=slot,
+            technician=technician,
+        )
+        return MaintenanceRecord.objects.create(
+            vehicle=vehicle,
+            service_type=service_type,
+            technician=technician,
+            appointment=appointment,
+            service_date=service_date,
+            mileage_at_service=mileage,
+            notes=notes,
+        )
+
     def valid_vehicle_data(self, **overrides):
         data = {
             "manufacturer": "Mazda",
@@ -235,6 +293,87 @@ class VehicleWorkflowTests(TestCase):
         response = self.client.get(reverse("vehicles:vehicle-detail", args=[self.vehicle.pk]))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.vehicle.license_plate)
+
+    def test_vehicle_detail_renders_history_and_due_service_details(self):
+        self.vehicle.current_mileage = 6000
+        self.vehicle.save(update_fields=["current_mileage"])
+        record = self.make_maintenance_record(
+            self.vehicle,
+            "Oil service",
+            date(2026, 3, 25),
+            1000,
+            "Changed oil and filter",
+        )
+        self.client.force_login(self.owner)
+        with patch("apps.maintenance.services.timezone.localdate", return_value=date(2026, 9, 25)):
+            response = self.client.get(reverse("vehicles:vehicle-detail", args=[self.vehicle.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["maintenance_history"], [record])
+        result = response.context["due_services"][0]
+        self.assertEqual(result.status, "DUE")
+        self.assertEqual(result.last_service, record)
+        self.assertContains(response, "Maintenance History")
+        self.assertContains(response, "Due-Service Overview")
+        self.assertContains(response, "Oil service")
+        self.assertContains(response, "Changed oil and filter")
+        self.assertContains(response, "workflow-maintenance-tech")
+        self.assertContains(response, "Next due mileage")
+        self.assertContains(response, "Next due date")
+        self.assertContains(response, "Mileage: DUE")
+        self.assertContains(response, "Date: DUE")
+
+    def test_vehicle_detail_shows_no_history_for_each_service_type(self):
+        ServiceType.objects.create(
+            name="Brake service",
+            description="Brakes",
+            interval_km=10000,
+            interval_months=12,
+            duration_minutes=60,
+            price=Decimal("0.00"),
+        )
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("vehicles:vehicle-detail", args=[self.vehicle.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No maintenance history is recorded for this vehicle.")
+        self.assertContains(response, "NO_HISTORY")
+        self.assertContains(response, "No recorded maintenance history is available for this service.")
+
+    def test_vehicle_detail_excludes_another_vehicles_and_owners_history(self):
+        own_record = self.make_maintenance_record(
+            self.vehicle, "Owner service", date(2026, 1, 1), 1000, "OWNED NOTE"
+        )
+        foreign_record = self.make_maintenance_record(
+            self.other_vehicle,
+            "Other service",
+            date(2025, 2, 3),
+            28765,
+            "FOREIGN NOTE",
+            technician_username="foreign-maintenance-tech",
+        )
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("vehicles:vehicle-detail", args=[self.vehicle.pk]))
+        self.assertEqual(response.context["maintenance_history"], [own_record])
+        self.assertContains(response, "OWNED NOTE")
+        # ServiceType is shared catalog data; only the foreign record is private.
+        self.assertContains(response, "Other service")
+        due_by_service = {
+            result.service_type.name: result
+            for result in response.context["due_services"]
+        }
+        self.assertEqual(due_by_service["Other service"].status, "NO_HISTORY")
+        self.assertIsNone(due_by_service["Other service"].last_service)
+        self.assertNotIn(foreign_record, response.context["maintenance_history"])
+        self.assertNotContains(response, "FOREIGN NOTE")
+        self.assertNotContains(response, "2025-02-03")
+        self.assertNotContains(response, "28765")
+        self.assertNotContains(response, "foreign-maintenance-tech")
+
+    def test_cross_owner_detail_does_not_start_maintenance_loading(self):
+        self.client.force_login(self.owner)
+        with patch("apps.vehicles.views.get_vehicle_maintenance_overview") as overview:
+            response = self.client.get(reverse("vehicles:vehicle-detail", args=[self.other_vehicle.pk]))
+        self.assertEqual(response.status_code, 404)
+        overview.assert_not_called()
 
     def test_owner_can_update_vehicle_without_changing_ownership(self):
         self.client.force_login(self.owner)

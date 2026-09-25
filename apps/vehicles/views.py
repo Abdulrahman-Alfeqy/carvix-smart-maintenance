@@ -3,6 +3,7 @@ from django.urls import reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
 from apps.authentication.models import User
+from apps.maintenance.services import get_vehicle_maintenance_overview
 
 from .forms import VehicleForm
 from .models import Vehicle
@@ -45,6 +46,13 @@ class VehicleDetailView(LoginRequiredMixin, OwnerRequiredMixin, DetailView):
 
     def get_queryset(self):
         return Vehicle.objects.filter(owner=self.request.user)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        overview = get_vehicle_maintenance_overview(self.object)
+        context["maintenance_history"] = overview["history"]
+        context["due_services"] = overview["due_services"]
+        return context
 
 
 class VehicleUpdateView(LoginRequiredMixin, OwnerRequiredMixin, UpdateView):

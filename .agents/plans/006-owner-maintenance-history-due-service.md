@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: APPROVED
+- Status: IMPLEMENTED
 - Related issue: N/A
 - Owner: Arwa
 - Reviewer: Abdalrahaman Atef
@@ -253,13 +253,17 @@ Implementation must not begin while Status is `DRAFT` or Decision is `PENDING`.
 
 ## Implementation Report
 
-Complete this section after implementation.
-
-- Summary:
-- Files changed:
-- Tests executed:
-- Test results:
-- Migration/environment changes:
-- Security checks:
-- Remaining risks:
-- Deviations from plan:
+- Summary: Implemented the read-only Owner maintenance overview on the owned Vehicle detail page. It displays Vehicle-scoped history and one calculated result per ServiceType using `NO_HISTORY`, `NOT_DUE`, `DUE`, and `OVERDUE`. Latest records are selected by descending `service_date` and primary key. Mileage and date thresholds are evaluated independently with calendar-month arithmetic and end-of-month clamping. Inconsistent mileage is handled without negative distance, reasons are deterministic, and no derived status is stored.
+- Files created: `apps/maintenance/services.py`.
+- Files modified: `apps/maintenance/tests.py`, `apps/vehicles/views.py`, `apps/vehicles/tests.py`, `templates/vehicles/vehicle_detail.html`, and this plan.
+- Targeted corrected tests: 3 tests found; 3 passed; 0 failures; 0 errors.
+- Focused tests: `python manage.py test apps.maintenance apps.vehicles -v 2` — 69 tests found; 69 passed; 0 failures; 0 errors. PostgreSQL test database created and destroyed successfully.
+- Complete suite: `python manage.py test -v 2` — 155 tests found; 155 passed; 0 failures; 0 errors. PostgreSQL test database created and destroyed successfully.
+- Additional validation: `python manage.py check` passed with no issues. `python manage.py makemigrations --check` reported no changes. `git diff --check` passed. The `apps/maintenance/migrations/` and `apps/vehicles/migrations/` directories contain no migration beyond the existing `0001_initial.py` (and package `__init__.py`); no migration was generated.
+- Security checks: Anonymous access redirects to login; only an OWNER can access an owned Vehicle; TECHNICIAN and ADMINISTRATOR receive 403; cross-owner Vehicle requests return 404 and do not invoke the maintenance service. Vehicle-scoped queries exclude foreign MaintenanceRecords. Shared ServiceType catalog entries may appear as `NO_HISTORY` without exposing another Vehicle's record fields. No client-supplied owner or user identifier establishes access. The workflow performs no writes.
+- Calculation checks: The status vocabulary is exactly `NO_HISTORY`, `NOT_DUE`, `DUE`, and `OVERDUE`; no derived status is stored. Equality is `DUE`, exceeding a threshold is `OVERDUE`, and precedence is `OVERDUE` > `DUE` > `NOT_DUE`. Mileage and date are independent. `NO_HISTORY` uses no invented baseline. Latest record selection uses service date then primary key. Calendar-month clamping, leap and non-leap February, and year rollover are covered. Inconsistent mileage produces no negative distance, does not classify mileage, and leaves date evaluation active. Reasons are deterministic and ordered mileage then date.
+- Query and performance approach: ServiceTypes are loaded once in predictable order. Only the selected Vehicle's MaintenanceRecords are loaded, with `select_related` for display relations. The same record list is used for history and calculations. The implementation has no per-ServiceType query loop or template-side ORM/calculation logic.
+- Independent review: Verdict `APPROVABLE`; no BLOCKER, HIGH, or MEDIUM findings. One LOW, non-blocking note records that the query-count test uses a narrow fixture. The implementation itself uses two bounded collection queries with `select_related`. The Implementation Report was approved for finalization.
+- Deviations: PostgreSQL was temporarily unavailable during initial validation. The first run exposed three test-fixture/assertion defects: the mileage test also made date due; the independent ServiceType fixture made neither dimension due; and the isolation assertion treated a shared catalog ServiceType as private record data. The tests were corrected to match the approved independent-dimension and shared-catalog behavior. No production-service change was required for these failures, and no scope deviation occurred. All targeted, focused, and complete test suites subsequently passed.
+- Remaining future scope: MaintenanceRecord creation and Technician completion; appointment booking; ServiceSlot display; inventory mutation; general project-wide RBAC; dashboards; AgentActionLog; AI tools; Chat UI; and LLM integration.
+- Final result: Implementation, validation, and independent review are complete. No blocking issue remains. Ready for final audit, commit, push, and Pull Request.
