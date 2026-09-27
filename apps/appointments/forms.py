@@ -1,7 +1,8 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from apps.maintenance.models import ServiceType
+from apps.authentication.models import User
+from apps.maintenance.models import ServiceType, TechnicianProfile
 from apps.vehicles.models import Vehicle
 
 from .models import ServiceSlot
@@ -40,3 +41,18 @@ class AppointmentBookingForm(forms.Form):
         self.fields["slot"].help_text = _(
             "Availability may change before the booking is finalized."
         )
+
+
+class TechnicianAssignmentForm(forms.Form):
+    technician = forms.ModelChoiceField(
+        queryset=TechnicianProfile.objects.filter(
+            user__role=User.Role.TECHNICIAN,
+            is_available=True,
+        ).select_related("user"),
+        label=_("Technician"),
+        error_messages={"invalid_choice": _("Choose an available Technician account.")},
+    )
+    confirm_assignment = forms.BooleanField(
+        required=True,
+        label=_("I confirm this Technician assignment."),
+    )
