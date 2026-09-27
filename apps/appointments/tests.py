@@ -1409,6 +1409,66 @@ class TechnicianMaintenanceWorkflowTests(AppointmentFixtures):
         self.assertFalse(appointment.maintenance_records.exists())
         self.assertEqual(MaintenancePart.objects.count(), 0)
 
+    def test_direct_service_rejects_non_integral_and_invalid_mileage_without_side_effects(self):
+        part = self.part(part_number="MILEAGE-INVALID", quantity=9)
+        rejected_values = (550.9, -0.5, True, "not-a-number", -1)
+
+        for index, value in enumerate(rejected_values):
+            with self.subTest(mileage=value):
+                appointment = self.make_appointment(
+                    slot=self.make_slot(), status=AppointmentStatus.IN_PROGRESS
+                )
+                with self.assertRaises(TechnicianMaintenanceError) as raised:
+                    complete_appointment_maintenance(
+                        actor=self.tech_user,
+                        appointment_id=appointment.pk,
+                        mileage_at_service=value,
+                        notes="Invalid mileage must not persist",
+                        parts=((part.pk, 1),),
+                    )
+                self.assertEqual(raised.exception.code, "invalid_mileage")
+                appointment.refresh_from_db()
+                part.refresh_from_db()
+                self.assertEqual(appointment.status, AppointmentStatus.IN_PROGRESS)
+                self.assertFalse(appointment.maintenance_records.exists())
+                self.assertEqual(MaintenancePart.objects.count(), 0)
+                self.assertEqual(part.quantity, 9)
+
+    def test_direct_service_accepts_integer_and_decimal_free_integer_string(self):
+        for index, value in enumerate((551, "552")):
+            with self.subTest(mileage=value):
+                appointment = self.make_appointment(
+                    slot=self.make_slot(), status=AppointmentStatus.IN_PROGRESS
+                )
+                record = complete_appointment_maintenance(
+                    actor=self.tech_user,
+                    appointment_id=appointment.pk,
+                    mileage_at_service=value,
+                )
+                self.assertEqual(record.mileage_at_service, 551 + index)
+                appointment.refresh_from_db()
+                self.assertEqual(appointment.status, AppointmentStatus.COMPLETED)
+
+    def test_direct_service_rejects_fractional_decimal_without_side_effects(self):
+        from decimal import Decimal
+
+        appointment = self.make_appointment(status=AppointmentStatus.IN_PROGRESS)
+        part = self.part(part_number="MILEAGE-DECIMAL", quantity=4)
+        with self.assertRaises(TechnicianMaintenanceError) as raised:
+            complete_appointment_maintenance(
+                actor=self.tech_user,
+                appointment_id=appointment.pk,
+                mileage_at_service=Decimal("550.9"),
+                parts=((part.pk, 2),),
+            )
+        self.assertEqual(raised.exception.code, "invalid_mileage")
+        appointment.refresh_from_db()
+        part.refresh_from_db()
+        self.assertEqual(appointment.status, AppointmentStatus.IN_PROGRESS)
+        self.assertFalse(appointment.maintenance_records.exists())
+        self.assertEqual(MaintenancePart.objects.count(), 0)
+        self.assertEqual(part.quantity, 4)
+
     def test_unexpected_failure_after_record_creation_rolls_back_all_writes(self):
         appointment = self.make_appointment(status=AppointmentStatus.IN_PROGRESS)
         first = self.part(part_number="FAIL-A", quantity=8)

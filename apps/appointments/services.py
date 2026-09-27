@@ -134,13 +134,25 @@ def complete_appointment_maintenance(
                 code="already_completed",
             )
 
-        try:
-            mileage = int(mileage_at_service)
-        except (TypeError, ValueError, OverflowError) as error:
+        if isinstance(mileage_at_service, bool):
             raise TechnicianMaintenanceError(
                 "Enter a valid service mileage.", code="invalid_mileage"
-            ) from error
-        if isinstance(mileage_at_service, bool) or mileage < 0:
+            )
+        if isinstance(mileage_at_service, int):
+            mileage = mileage_at_service
+        elif isinstance(mileage_at_service, str):
+            mileage_text = mileage_at_service.strip()
+            digits = mileage_text[1:] if mileage_text[:1] in {"+", "-"} else mileage_text
+            if not digits or not digits.isascii() or not digits.isdecimal():
+                raise TechnicianMaintenanceError(
+                    "Enter a valid service mileage.", code="invalid_mileage"
+                )
+            mileage = int(mileage_text)
+        else:
+            raise TechnicianMaintenanceError(
+                "Enter a valid service mileage.", code="invalid_mileage"
+            )
+        if mileage < 0:
             raise TechnicianMaintenanceError(
                 "Mileage cannot be negative.", code="invalid_mileage"
             )
