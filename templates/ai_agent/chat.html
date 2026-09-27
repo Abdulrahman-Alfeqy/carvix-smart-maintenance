@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}CARVIX Assistant{% endblock %}
+
+{% block content %}
+<section aria-labelledby="chat-heading">
+    <h1 id="chat-heading">CARVIX Assistant</h1>
+    <p>Ask about your permitted vehicle maintenance and appointment information.</p>
+    <div id="chat-messages" aria-live="polite" aria-relevant="additions text">
+        <p id="chat-guidance">Your conversation will appear here. No appointment or other action can be completed from this foundation.</p>
+    </div>
+    <p id="chat-status" role="status" aria-live="polite"></p>
+    <form id="chat-form" method="post" action="{{ chat_endpoint }}" data-endpoint="{{ chat_endpoint }}">
+        {% csrf_token %}
+        <label for="chat-message">Message</label>
+        <textarea id="chat-message" name="message" rows="3" maxlength="4000" required></textarea>
+        <button id="chat-send" type="submit">Send</button>
+    </form>
+</section>
+<script src="{% static 'js/agent_chat.js' %}" defer></script>
+{% endblock %}
