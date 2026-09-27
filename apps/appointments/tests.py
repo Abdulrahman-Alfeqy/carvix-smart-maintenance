@@ -580,6 +580,22 @@ class OwnerAppointmentViewTests(AppointmentFixtures):
         self.assertNotContains(response, f"Appointment {foreign.pk}")
         self.assertNotContains(response, foreign.notes)
 
+    def test_owner_with_no_appointments_sees_empty_state_and_no_foreign_rows(self):
+        foreign = self.create_other_owner_appointment()
+        self.client.force_login(self.owner)
+
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "You do not have any appointments yet.")
+        self.assertEqual(list(response.context["appointments"]), [])
+        self.assertNotContains(response, f"Appointment {foreign.pk}")
+        self.assertNotContains(
+            response,
+            reverse("appointments:appointment-detail", kwargs={"pk": foreign.pk}),
+        )
+        self.assertNotContains(response, foreign.notes)
+
     def test_owner_can_view_own_detail_and_query_owner_id_does_not_change_scope(self):
         appointment = self.make_appointment(notes="owner appointment detail note")
         self.client.force_login(self.owner)
@@ -594,6 +610,37 @@ class OwnerAppointmentViewTests(AppointmentFixtures):
         self.assertContains(response, appointment.vehicle.license_plate)
         self.assertContains(response, appointment.service_type.name)
         self.assertContains(response, appointment.notes)
+
+    def test_detail_renders_assigned_technician_without_disclosing_user_data(self):
+        appointment = self.make_appointment()
+        self.client.force_login(self.owner)
+
+        response = self.client.get(
+            reverse("appointments:appointment-detail", kwargs={"pk": appointment.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "<dt>Technician</dt>", html=True)
+        self.assertContains(response, f"<dd>{self.tech_user.username}</dd>", html=True)
+        self.assertNotContains(response, self.tech_user.email)
+        self.assertNotContains(response, User.Role.TECHNICIAN)
+        self.assertNotContains(response, "is_staff")
+        self.assertNotContains(response, "is_superuser")
+        self.assertNotContains(response, "Permissions")
+        self.assertNotContains(response, "Technician ID")
+        self.assertNotContains(response, "User ID")
+
+    def test_detail_shows_neutral_fallback_when_no_technician_is_assigned(self):
+        appointment = self.make_appointment(technician=None)
+        self.client.force_login(self.owner)
+
+        response = self.client.get(
+            reverse("appointments:appointment-detail", kwargs={"pk": appointment.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "<dt>Technician</dt>", html=True)
+        self.assertContains(response, "<dd>Not assigned</dd>", html=True)
 
     def test_cross_owner_detail_returns_404_without_disclosing_appointment_data(self):
         foreign = self.create_other_owner_appointment()

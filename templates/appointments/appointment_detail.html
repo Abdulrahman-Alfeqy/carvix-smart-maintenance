@@ -16,6 +16,8 @@
     <dd>{{ appointment.slot.end_time }}</dd>
     <dt>Status</dt>
     <dd>{{ appointment.get_status_display }}</dd>
+    <dt>Technician</dt>
+    <dd>{% if appointment.technician %}{{ appointment.technician.user.username }}{% else %}Not assigned{% endif %}</dd>
     {% if appointment.notes %}
         <dt>Notes</dt>
         <dd>{{ appointment.notes }}</dd>

@@ -38,6 +38,9 @@ class OwnerAppointmentDetailView(
     context_object_name = "appointment"
     login_url = reverse_lazy("authentication:login")
 
+    def get_queryset(self):
+        return super().get_queryset().select_related("technician__user")
+
 
 class AppointmentBookingView(LoginRequiredMixin, OwnerRequiredMixin, FormView):
     form_class = AppointmentBookingForm
