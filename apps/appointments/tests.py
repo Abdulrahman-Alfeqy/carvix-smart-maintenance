@@ -1,11 +1,24 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from decimal import Decimal
+from threading import Barrier
+from types import SimpleNamespace
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, connection, transaction
+from django.db import (
+    IntegrityError,
+    close_old_connections,
+    connection,
+    connections,
+    transaction,
+)
 from django.db.models.deletion import ProtectedError
+from django.test import Client
 from unittest import skipIf
+from unittest.mock import patch
+from django.urls import reverse
 
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
@@ -20,6 +33,9 @@ from .models import (
     AppointmentStatus,
     ServiceSlot,
 )
+from .selectors import get_available_service_slots
+from .forms import AppointmentBookingForm
+from .services import AppointmentBookingError, book_appointment
 
 
 User = get_user_model()
@@ -106,6 +122,457 @@ class ServiceSlotTests(AppointmentFixtures):
         index_fields = {tuple(index.fields) for index in ServiceSlot._meta.indexes}
         self.assertIn(("start_time",), index_fields)
         self.assertIn(("is_active", "start_time"), index_fields)
+
+
+class AvailableServiceSlotSelectorTests(AppointmentFixtures):
+    def test_returns_only_active_future_slots_with_remaining_capacity(self):
+        now = timezone.now()
+        self.slot.is_active = False
+        self.slot.save(update_fields=("is_active",))
+
+        available = self.make_slot(
+            start_time=now + timedelta(hours=1),
+            end_time=now + timedelta(hours=2),
+            capacity=2,
+        )
+        inactive = self.make_slot(
+            start_time=now + timedelta(hours=2),
+            end_time=now + timedelta(hours=3),
+            is_active=False,
+        )
+        started = self.make_slot(
+            start_time=now - timedelta(minutes=1),
+            end_time=now + timedelta(minutes=29),
+        )
+        full = self.make_slot(
+            start_time=now + timedelta(hours=3),
+            end_time=now + timedelta(hours=4),
+            capacity=1,
+        )
+        self.make_appointment(slot=full)
+
+        slots = list(get_available_service_slots())
+
+        self.assertEqual([slot.pk for slot in slots], [available.pk])
+        self.assertEqual(slots[0].active_appointment_count, 0)
+        self.assertNotIn(inactive, slots)
+        self.assertNotIn(started, slots)
+        self.assertNotIn(full, slots)
+
+    def test_capacity_counts_only_active_appointment_statuses_in_one_query(self):
+        slot = self.make_slot(capacity=4)
+        for index, status in enumerate(ACTIVE_APPOINTMENT_STATUSES):
+            owner = User.objects.create_user(
+                username=f"selector-owner-{index}",
+                email=f"selector-owner-{index}@example.com",
+                password="test-password",
+            )
+            vehicle = Vehicle.objects.create(
+                owner=owner,
+                manufacturer="Toyota",
+                model="Yaris",
+                model_year=2021,
+                license_plate=f"SELECTOR-{index}",
+                current_mileage=500,
+            )
+            self.make_appointment(vehicle=vehicle, slot=slot, status=status)
+
+        terminal_slot = self.make_slot(capacity=1)
+        self.make_appointment(slot=terminal_slot, status=AppointmentStatus.COMPLETED)
+        self.make_appointment(slot=terminal_slot, status=AppointmentStatus.CANCELLED)
+
+        with self.assertNumQueries(1):
+            slots = list(get_available_service_slots())
+
+        by_id = {available.pk: available for available in slots}
+        self.assertEqual(by_id[slot.pk].active_appointment_count, 3)
+        self.assertEqual(by_id[terminal_slot.pk].active_appointment_count, 0)
+
+
+class AppointmentBookingFormTests(AppointmentFixtures):
+    def test_vehicle_queryset_is_limited_to_the_owner_and_fields_are_allowlisted(self):
+        other_owner = User.objects.create_user(
+            username="booking-form-other",
+            email="booking-form-other@example.com",
+            password="test-password",
+        )
+        other_vehicle = Vehicle.objects.create(
+            owner=other_owner,
+            manufacturer="Honda",
+            model="Civic",
+            model_year=2020,
+            license_plate="BOOK-FORM-OTHER",
+            current_mileage=100,
+        )
+
+        form = AppointmentBookingForm(owner=self.owner, initial_vehicle=self.vehicle)
+
+        self.assertEqual(list(form.fields["vehicle"].queryset), [self.vehicle])
+        self.assertNotIn(other_vehicle, form.fields["vehicle"].queryset)
+        self.assertEqual(set(form.fields), {"vehicle", "service_type", "slot"})
+        self.assertIn(self.slot, form.fields["slot"].queryset)
+
+
+class AppointmentBookingServiceTests(AppointmentFixtures):
+    def book(self, **overrides):
+        values = {
+            "actor": self.owner,
+            "vehicle_id": self.vehicle.pk,
+            "service_type_id": self.service_type.pk,
+            "slot_id": self.slot.pk,
+        }
+        values.update(overrides)
+        return book_appointment(**values)
+
+    def test_owner_booking_sets_only_manual_appointment_defaults(self):
+        appointment = self.book()
+
+        self.assertEqual(appointment.vehicle, self.vehicle)
+        self.assertEqual(appointment.service_type, self.service_type)
+        self.assertEqual(appointment.slot, self.slot)
+        self.assertEqual(appointment.status, AppointmentStatus.PENDING)
+        self.assertIsNone(appointment.technician)
+        self.assertFalse(appointment.booked_by_agent)
+
+    def test_anonymous_and_non_owner_actors_are_rejected(self):
+        with self.assertRaises(AppointmentBookingError) as anonymous:
+            self.book(actor=AnonymousUser())
+        self.assertEqual(anonymous.exception.code, "permission_denied")
+
+        with self.assertRaises(AppointmentBookingError) as technician:
+            self.book(actor=self.tech_user)
+        self.assertEqual(technician.exception.code, "permission_denied")
+        self.assertEqual(Appointment.objects.count(), 0)
+
+    def test_foreign_vehicle_is_rejected_without_disclosing_ownership(self):
+        other_owner = User.objects.create_user(
+            username="booking-service-other",
+            email="booking-service-other@example.com",
+            password="test-password",
+        )
+        other_vehicle = Vehicle.objects.create(
+            owner=other_owner,
+            manufacturer="Honda",
+            model="Civic",
+            model_year=2020,
+            license_plate="BOOK-SVC-OTHER",
+            current_mileage=100,
+        )
+
+        with self.assertRaises(AppointmentBookingError) as raised:
+            self.book(vehicle_id=other_vehicle.pk)
+
+        self.assertEqual(raised.exception.code, "permission_denied")
+        self.assertNotIn(other_vehicle.license_plate, str(raised.exception))
+        self.assertEqual(Appointment.objects.count(), 0)
+
+    def test_invalid_service_and_identifiers_are_rejected(self):
+        for values, expected_code in (
+            ({"service_type_id": 999999}, "invalid_service"),
+            ({"slot_id": "not-an-id"}, "invalid_selection"),
+        ):
+            with self.subTest(values=values):
+                with self.assertRaises(AppointmentBookingError) as raised:
+                    self.book(**values)
+                self.assertEqual(raised.exception.code, expected_code)
+        self.assertEqual(Appointment.objects.count(), 0)
+
+    def test_inactive_and_started_slots_are_rejected(self):
+        self.slot.is_active = False
+        self.slot.save(update_fields=("is_active",))
+        with self.assertRaises(AppointmentBookingError) as inactive:
+            self.book()
+        self.assertEqual(inactive.exception.code, "slot_inactive")
+
+        self.slot.is_active = True
+        self.slot.start_time = timezone.now() - timedelta(minutes=1)
+        self.slot.end_time = timezone.now() + timedelta(minutes=29)
+        self.slot.save(update_fields=("is_active", "start_time", "end_time"))
+        with self.assertRaises(AppointmentBookingError) as started:
+            self.book()
+        self.assertEqual(started.exception.code, "slot_expired")
+        self.assertEqual(Appointment.objects.count(), 0)
+
+    def test_duplicate_and_full_slot_are_rejected(self):
+        self.make_appointment(slot=self.slot)
+        with self.assertRaises(AppointmentBookingError) as duplicate:
+            self.book()
+        self.assertEqual(duplicate.exception.code, "duplicate_booking")
+
+        other_owner = User.objects.create_user(
+            username="booking-capacity-owner",
+            email="booking-capacity-owner@example.com",
+            password="test-password",
+        )
+        other_vehicle = Vehicle.objects.create(
+            owner=other_owner,
+            manufacturer="Honda",
+            model="Civic",
+            model_year=2020,
+            license_plate="BOOK-CAPACITY",
+            current_mileage=100,
+        )
+        full_slot = self.make_slot(capacity=1)
+        self.make_appointment(vehicle=other_vehicle, slot=full_slot)
+
+        with self.assertRaises(AppointmentBookingError) as full:
+            self.book(slot_id=full_slot.pk)
+        self.assertEqual(full.exception.code, "slot_full")
+
+    def test_terminal_appointments_do_not_consume_capacity(self):
+        self.slot.capacity = 1
+        self.slot.save(update_fields=("capacity",))
+        self.make_appointment(status=AppointmentStatus.COMPLETED)
+        self.make_appointment(status=AppointmentStatus.CANCELLED)
+
+        appointment = self.book()
+
+        self.assertEqual(appointment.status, AppointmentStatus.PENDING)
+        self.assertEqual(
+            Appointment.objects.filter(
+                slot=self.slot,
+                status__in=ACTIVE_APPOINTMENT_STATUSES,
+            ).count(),
+            1,
+        )
+
+    def test_expected_duplicate_constraint_error_is_translated_after_atomic_rollback(self):
+        original_create = Appointment.objects.create
+
+        def create_then_fail(**kwargs):
+            original_create(**kwargs)
+            error = IntegrityError("private database detail")
+            database_error = Exception("driver detail")
+            database_error.diag = SimpleNamespace(
+                constraint_name="appointments_active_slot_vehicle_uniq"
+            )
+            error.__cause__ = database_error
+            raise error
+
+        with patch.object(Appointment.objects, "create", side_effect=create_then_fail):
+            with self.assertRaises(AppointmentBookingError) as raised:
+                self.book()
+
+        self.assertEqual(raised.exception.code, "booking_conflict")
+        self.assertNotIn("private database detail", str(raised.exception))
+        self.assertEqual(Appointment.objects.count(), 0)
+
+    def test_unrelated_integrity_error_propagates_after_atomic_rollback(self):
+        original_create = Appointment.objects.create
+
+        def create_then_fail(**kwargs):
+            original_create(**kwargs)
+            error = IntegrityError("unrelated private database detail")
+            database_error = Exception("driver detail")
+            database_error.diag = SimpleNamespace(
+                constraint_name="appointments_status_valid"
+            )
+            error.__cause__ = database_error
+            raise error
+
+        with patch.object(Appointment.objects, "create", side_effect=create_then_fail):
+            with self.assertRaisesRegex(IntegrityError, "unrelated private database detail"):
+                self.book()
+
+        self.assertEqual(Appointment.objects.count(), 0)
+
+
+class AppointmentBookingViewTests(AppointmentFixtures):
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("appointments:book", kwargs={"vehicle_pk": self.vehicle.pk})
+
+    def test_owner_can_open_booking_form_from_owned_vehicle(self):
+        self.client.force_login(self.owner)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Book a Service")
+        self.assertContains(response, str(self.vehicle.license_plate))
+        self.assertContains(response, "csrfmiddlewaretoken")
+
+    def test_other_owner_vehicle_is_not_retrieved(self):
+        other_owner = User.objects.create_user(
+            username="booking-view-other",
+            email="booking-view-other@example.com",
+            password="test-password",
+        )
+        other_vehicle = Vehicle.objects.create(
+            owner=other_owner,
+            manufacturer="Honda",
+            model="Civic",
+            model_year=2020,
+            license_plate="BOOK-VIEW-OTHER",
+            current_mileage=100,
+        )
+        self.client.force_login(self.owner)
+
+        response = self.client.get(
+            reverse("appointments:book", kwargs={"vehicle_pk": other_vehicle.pk})
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_anonymous_and_non_owner_access_are_denied(self):
+        self.assertEqual(self.client.get(self.url).status_code, 302)
+
+        self.client.force_login(self.tech_user)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+
+    def test_administrator_access_is_denied(self):
+        administrator = User.objects.create_user(
+            username="booking-admin",
+            email="booking-admin@example.com",
+            password="test-password",
+            role=User.Role.ADMINISTRATOR,
+        )
+        self.client.force_login(administrator)
+
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+
+    def test_form_rendering_makes_final_booking_action_explicit(self):
+        self.client.force_login(self.owner)
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "Confirm and Book Appointment")
+        self.assertContains(response, "Submitting this form will create the appointment.")
+        self.assertNotContains(response, "Review Selection")
+
+    def test_valid_post_persists_and_confirms_the_saved_appointment(self):
+        self.client.force_login(self.owner)
+
+        response = self.client.post(
+            self.url,
+            {
+                "vehicle": str(self.vehicle.pk),
+                "service_type": str(self.service_type.pk),
+                "slot": str(self.slot.pk),
+                "status": "COMPLETED",
+                "booked_by_agent": "true",
+                "technician": str(self.technician.pk),
+            },
+        )
+
+        appointment = Appointment.objects.get()
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.url,
+            reverse("vehicles:vehicle-detail", kwargs={"pk": self.vehicle.pk}),
+        )
+        self.assertEqual(appointment.vehicle, self.vehicle)
+        self.assertEqual(appointment.service_type, self.service_type)
+        self.assertEqual(appointment.slot, self.slot)
+        self.assertEqual(appointment.status, AppointmentStatus.PENDING)
+        self.assertIsNone(appointment.technician)
+        self.assertFalse(appointment.booked_by_agent)
+        self.assertContains(self.client.get(response.url), f"Appointment {appointment.pk} booked")
+
+    def test_invalidated_slot_returns_safe_error_and_creates_no_appointment(self):
+        self.slot.is_active = False
+        self.slot.save(update_fields=("is_active",))
+        self.client.force_login(self.owner)
+
+        response = self.client.post(
+            self.url,
+            {
+                "vehicle": str(self.vehicle.pk),
+                "service_type": str(self.service_type.pk),
+                "slot": str(self.slot.pk),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "time slot is no longer available")
+        self.assertEqual(Appointment.objects.count(), 0)
+
+    def test_csrf_is_required_for_post(self):
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.owner)
+
+        response = csrf_client.post(
+            self.url,
+            {
+                "vehicle": str(self.vehicle.pk),
+                "service_type": str(self.service_type.pk),
+                "slot": str(self.slot.pk),
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+
+@skipIf(not is_postgres, "Concurrent booking tests require PostgreSQL row locks")
+class AppointmentBookingConcurrencyTests(TransactionTestCase):
+    def setUp(self):
+        self.owners = [
+            User.objects.create_user(
+                username=f"concurrent-owner-{index}",
+                email=f"concurrent-owner-{index}@example.com",
+                password="test-password",
+            )
+            for index in range(2)
+        ]
+        self.vehicles = [
+            Vehicle.objects.create(
+                owner=owner,
+                manufacturer="Toyota",
+                model="Yaris",
+                model_year=2021,
+                license_plate=f"CONCURRENT-{index}",
+                current_mileage=500,
+            )
+            for index, owner in enumerate(self.owners)
+        ]
+        self.service_type = ServiceType.objects.create(
+            name="Concurrent booking service",
+            description="Test service",
+            interval_km=1000,
+            interval_months=3,
+            duration_minutes=30,
+            price=Decimal("10.00"),
+        )
+        start = timezone.now() + timedelta(days=1)
+        self.slot = ServiceSlot.objects.create(
+            start_time=start,
+            end_time=start + timedelta(minutes=30),
+            capacity=1,
+        )
+
+    def test_concurrent_different_owners_cannot_exceed_slot_capacity(self):
+        barrier = Barrier(2)
+
+        def attempt_booking(index):
+            close_old_connections()
+            try:
+                owner = User.objects.get(pk=self.owners[index].pk)
+                barrier.wait(timeout=10)
+                appointment = book_appointment(
+                    actor=owner,
+                    vehicle_id=self.vehicles[index].pk,
+                    service_type_id=self.service_type.pk,
+                    slot_id=self.slot.pk,
+                )
+                return ("booked", appointment.pk)
+            except AppointmentBookingError as error:
+                return ("rejected", error.code)
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(attempt_booking, range(2)))
+
+        self.assertCountEqual([outcome[0] for outcome in outcomes], ["booked", "rejected"])
+        rejected = next(outcome for outcome in outcomes if outcome[0] == "rejected")
+        self.assertEqual(rejected[1], "slot_full")
+        self.assertEqual(
+            Appointment.objects.filter(
+                slot=self.slot,
+                status__in=ACTIVE_APPOINTMENT_STATUSES,
+            ).count(),
+            1,
+        )
 
 
 class AppointmentModelTests(AppointmentFixtures):

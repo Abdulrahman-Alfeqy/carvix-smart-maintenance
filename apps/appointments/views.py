@@ -1,0 +1,61 @@
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib import messages
+from django.shortcuts import get_object_or_404
+from django.shortcuts import redirect
+from django.urls import reverse_lazy
+from django.views.generic import FormView
+
+from apps.vehicles.models import Vehicle
+from apps.vehicles.views import OwnerRequiredMixin
+
+from .forms import AppointmentBookingForm
+from .services import AppointmentBookingError, book_appointment
+
+
+class AppointmentBookingView(LoginRequiredMixin, OwnerRequiredMixin, FormView):
+    form_class = AppointmentBookingForm
+    template_name = "appointments/booking_form.html"
+    login_url = reverse_lazy("authentication:login")
+
+    def get_vehicle(self):
+        return get_object_or_404(
+            Vehicle.objects.filter(owner=self.request.user),
+            pk=self.kwargs["vehicle_pk"],
+        )
+
+    def get_initial(self):
+        initial = super().get_initial()
+        initial["vehicle"] = self.get_vehicle().pk
+        return initial
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["owner"] = self.request.user
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["vehicle"] = self.get_vehicle()
+        context["has_available_slots"] = context["form"].has_available_slots
+        return context
+
+    def form_valid(self, form):
+        try:
+            appointment = book_appointment(
+                actor=self.request.user,
+                vehicle_id=form.cleaned_data["vehicle"].pk,
+                service_type_id=form.cleaned_data["service_type"].pk,
+                slot_id=form.cleaned_data["slot"].pk,
+            )
+        except AppointmentBookingError as error:
+            form.add_error(None, str(error))
+            return self.form_invalid(form)
+
+        messages.success(
+            self.request,
+            (
+                f"Appointment {appointment.pk} booked for {appointment.vehicle.license_plate}: "
+                f"{appointment.service_type.name} at {appointment.slot.start_time}."
+            ),
+        )
+        return redirect("vehicles:vehicle-detail", pk=appointment.vehicle_id)
