@@ -24,5 +24,14 @@
     {% endif %}
 </dl>
 
+{% if appointment.status == "PENDING" or appointment.status == "CONFIRMED" %}
+<form method="post" action="{% url 'appointments:technician-appointment-start' appointment.pk %}">
+    {% csrf_token %}
+    <button type="submit">Start service</button>
+</form>
+{% elif appointment.status == "IN_PROGRESS" %}
+<p><a href="{% url 'appointments:technician-appointment-complete' appointment.pk %}">Complete maintenance</a></p>
+{% endif %}
+
 <p><a href="{% url 'appointments:technician-appointment-list' %}">Back to Assigned Appointments</a></p>
 {% endblock %}

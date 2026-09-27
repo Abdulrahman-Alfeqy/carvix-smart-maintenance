@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}Complete Appointment {{ appointment.pk }} - CARVIX{% endblock %}
+
+{% block content %}
+<h1>Complete maintenance for Appointment {{ appointment.pk }}</h1>
+<p>{{ appointment.vehicle.manufacturer }} {{ appointment.vehicle.model }} ({{ appointment.vehicle.license_plate }})</p>
+<p>{{ appointment.service_type.name }}</p>
+
+<form method="post">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    <div>
+        {{ form.mileage_at_service.label_tag }}
+        {{ form.mileage_at_service }}
+        {{ form.mileage_at_service.errors }}
+    </div>
+    <div>
+        {{ form.notes.label_tag }}
+        {{ form.notes }}
+        {{ form.notes.errors }}
+    </div>
+
+    <fieldset>
+        <legend>Spare parts used (optional)</legend>
+        {{ parts_formset.management_form }}
+        {{ parts_formset.non_form_errors }}
+        {% for part_form in parts_formset %}
+            <div>
+                {{ part_form.spare_part.label_tag }}
+                {{ part_form.spare_part }}
+                {{ part_form.spare_part.errors }}
+                {{ part_form.quantity_used.label_tag }}
+                {{ part_form.quantity_used }}
+                {{ part_form.quantity_used.errors }}
+                {{ part_form.non_field_errors }}
+            </div>
+        {% endfor %}
+    </fieldset>
+
+    <button type="submit">Complete maintenance</button>
+</form>
+<p><a href="{% url 'appointments:technician-appointment-detail' appointment.pk %}">Cancel</a></p>
+{% endblock %}

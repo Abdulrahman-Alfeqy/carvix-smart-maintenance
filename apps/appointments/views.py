@@ -3,6 +3,7 @@ from django.contrib import messages
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
+from django.views import View
 from django.views.generic import DetailView, FormView, ListView
 
 from apps.authentication.models import User
@@ -10,13 +11,21 @@ from apps.maintenance.models import TechnicianProfile
 from apps.vehicles.models import Vehicle
 from apps.vehicles.views import OwnerRequiredMixin
 
-from .forms import AppointmentBookingForm, TechnicianAssignmentForm
-from .models import Appointment
+from .forms import (
+    AppointmentBookingForm,
+    MaintenanceCompletionForm,
+    SparePartUsageFormSet,
+    TechnicianAssignmentForm,
+)
+from .models import Appointment, AppointmentStatus
 from .services import (
     AppointmentBookingError,
     TechnicianAssignmentError,
+    TechnicianMaintenanceError,
     assign_technician,
     book_appointment,
+    complete_appointment_maintenance,
+    start_appointment_service,
 )
 
 
@@ -121,6 +130,100 @@ class TechnicianAppointmentDetailView(
     template_name = "appointments/technician_appointment_detail.html"
     context_object_name = "appointment"
     login_url = reverse_lazy("authentication:login")
+
+
+class TechnicianStartServiceView(
+    LoginRequiredMixin, TechnicianRequiredMixin, TechnicianAppointmentQuerysetMixin, View
+):
+    login_url = reverse_lazy("authentication:login")
+
+    def post(self, request, *args, **kwargs):
+        appointment = self.get_queryset().filter(pk=kwargs["pk"]).first()
+        if appointment is None:
+            raise Http404
+        try:
+            start_appointment_service(actor=request.user, appointment_id=appointment.pk)
+        except TechnicianMaintenanceError as error:
+            if error.code == "appointment_not_found":
+                raise Http404 from error
+            messages.error(request, str(error))
+        else:
+            messages.success(request, f"Appointment {appointment.pk} started.")
+        return redirect("appointments:technician-appointment-detail", pk=appointment.pk)
+
+
+class TechnicianMaintenanceCompletionView(
+    LoginRequiredMixin,
+    TechnicianRequiredMixin,
+    TechnicianAppointmentQuerysetMixin,
+    FormView,
+):
+    form_class = MaintenanceCompletionForm
+    template_name = "appointments/technician_maintenance_completion.html"
+    login_url = reverse_lazy("authentication:login")
+
+    def get_appointment(self):
+        if not hasattr(self, "_appointment"):
+            self._appointment = get_object_or_404(
+                self.get_queryset(), pk=self.kwargs["pk"]
+            )
+        return self._appointment
+
+    def get_formset(self):
+        if not hasattr(self, "_formset"):
+            data = self.request.POST if self.request.method == "POST" else None
+            self._formset = SparePartUsageFormSet(data=data, prefix="parts")
+        return self._formset
+
+    def get(self, request, *args, **kwargs):
+        if self.get_appointment().status != AppointmentStatus.IN_PROGRESS:
+            raise Http404
+        return super().get(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["appointment"] = self.get_appointment()
+        context["parts_formset"] = kwargs.get("parts_formset", self.get_formset())
+        return context
+
+    def form_valid(self, form):
+        formset = self.get_formset()
+        if not formset.is_valid():
+            form.add_error(None, "Correct the SparePart entries or remove incomplete rows.")
+            return self.form_invalid(form)
+        usages = []
+        for part_form in formset:
+            values = part_form.cleaned_data
+            part = values.get("spare_part")
+            quantity = values.get("quantity_used")
+            if part is None and quantity is None:
+                continue
+            if part is None or quantity is None:
+                part_form.add_error(None, "Choose a part and enter its quantity.")
+                form.add_error(None, "Correct the incomplete SparePart entries.")
+                return self.form_invalid(form)
+            usages.append((part.pk, quantity))
+
+        appointment = self.get_appointment()
+        try:
+            record = complete_appointment_maintenance(
+                actor=self.request.user,
+                appointment_id=appointment.pk,
+                mileage_at_service=form.cleaned_data["mileage_at_service"],
+                notes=form.cleaned_data["notes"],
+                parts=usages,
+            )
+        except TechnicianMaintenanceError as error:
+            if error.code == "appointment_not_found":
+                raise Http404 from error
+            form.add_error(None, str(error))
+            return self.form_invalid(form)
+
+        messages.success(self.request, "Maintenance was completed and recorded.")
+        return redirect(
+            "appointments:technician-appointment-detail",
+            pk=record.appointment_id,
+        )
 
 
 class OwnerAppointmentQuerysetMixin:

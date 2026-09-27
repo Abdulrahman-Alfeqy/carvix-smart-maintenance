@@ -1,8 +1,10 @@
 from django import forms
+from django.forms import formset_factory
 from django.utils.translation import gettext_lazy as _
 
 from apps.authentication.models import User
 from apps.maintenance.models import ServiceType, TechnicianProfile
+from apps.inventory.models import SparePart
 from apps.vehicles.models import Vehicle
 
 from .models import ServiceSlot
@@ -56,3 +58,41 @@ class TechnicianAssignmentForm(forms.Form):
         required=True,
         label=_("I confirm this Technician assignment."),
     )
+
+
+class MaintenanceCompletionForm(forms.Form):
+    mileage_at_service = forms.IntegerField(
+        min_value=0,
+        label=_("Mileage at service"),
+        error_messages={"min_value": _("Mileage cannot be negative.")},
+    )
+    notes = forms.CharField(
+        required=False,
+        widget=forms.Textarea,
+        label=_("Maintenance notes"),
+    )
+
+
+class SparePartUsageForm(forms.Form):
+    spare_part = forms.ModelChoiceField(
+        queryset=SparePart.objects.none(),
+        required=False,
+        label=_("Spare part"),
+    )
+    quantity_used = forms.IntegerField(
+        min_value=1,
+        required=False,
+        label=_("Quantity used"),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["spare_part"].queryset = SparePart.objects.order_by("name", "pk")
+
+
+SparePartUsageFormSet = formset_factory(
+    SparePartUsageForm,
+    extra=10,
+    max_num=20,
+    validate_max=True,
+)
