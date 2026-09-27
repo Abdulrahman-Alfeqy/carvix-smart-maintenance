@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     'apps.maintenance',
     'apps.appointments',
     'apps.inventory',
+    'apps.ai_agent.apps.AiAgentConfig',
 ]
 
 AUTH_USER_MODEL = 'authentication.User'
