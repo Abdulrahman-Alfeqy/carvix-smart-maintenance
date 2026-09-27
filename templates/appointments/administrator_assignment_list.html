@@ -3,21 +3,21 @@
 {% block title %}Technician Assignments - CARVIX{% endblock %}
 
 {% block content %}
-<h1>Appointments Awaiting Technician Assignment</h1>
+<h1 class="page-title">Appointments Awaiting Technician Assignment</h1>
 
 {% if appointments %}
-    <ul>
+    <ul class="list-grid">
         {% for appointment in appointments %}
             <li>
                 <h2>Appointment {{ appointment.pk }}</h2>
                 <p>{{ appointment.service_type.name }} for {{ appointment.vehicle.manufacturer }} {{ appointment.vehicle.model }} ({{ appointment.vehicle.license_plate }})</p>
                 <p>Scheduled: {{ appointment.slot.start_time }}</p>
                 <p>Status: {{ appointment.get_status_display }}</p>
-                <a href="{% url 'appointments:administrator-appointment-assign' appointment.pk %}">Assign Technician</a>
+                <a class="button" href="{% url 'appointments:administrator-appointment-assign' appointment.pk %}">Assign Technician</a>
             </li>
         {% endfor %}
     </ul>
 {% else %}
-    <p>There are no unassigned appointments.</p>
+    <p class="empty-state">There are no unassigned appointments.</p>
 {% endif %}
 {% endblock %}

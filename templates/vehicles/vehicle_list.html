@@ -3,12 +3,12 @@
 {% block title %}Vehicles - CARVIX{% endblock %}
 
 {% block content %}
-<h1>Your Vehicles</h1>
+<h1 class="page-title">Your Vehicles</h1>
 
-<p><a href="{% url 'vehicles:vehicle-create' %}">Add Vehicle</a></p>
+<p class="action-links"><a class="button" href="{% url 'vehicles:vehicle-create' %}">Add Vehicle</a></p>
 
 {% if vehicles %}
-    <ul>
+    <ul class="list-grid">
         {% for vehicle in vehicles %}
             <li>
                 <a href="{% url 'vehicles:vehicle-detail' vehicle.pk %}">
@@ -18,6 +18,6 @@
         {% endfor %}
     </ul>
 {% else %}
-    <p>You have not added any vehicles yet.</p>
+    <p class="empty-state">You have not added any vehicles yet.</p>
 {% endif %}
 {% endblock %}

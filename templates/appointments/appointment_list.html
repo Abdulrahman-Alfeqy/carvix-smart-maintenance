@@ -3,10 +3,10 @@
 {% block title %}Your Appointments - CARVIX{% endblock %}
 
 {% block content %}
-<h1>Your Appointments</h1>
+<h1 class="page-title">Your Appointments</h1>
 
 {% if appointments %}
-    <ul>
+    <ul class="list-grid">
         {% for appointment in appointments %}
             <li>
                 <h2><a href="{% url 'appointments:appointment-detail' appointment.pk %}">Appointment {{ appointment.pk }}</a></h2>
@@ -17,6 +17,6 @@
         {% endfor %}
     </ul>
 {% else %}
-    <p>You do not have any appointments yet.</p>
+    <p class="empty-state">You do not have any appointments yet.</p>
 {% endif %}
 {% endblock %}

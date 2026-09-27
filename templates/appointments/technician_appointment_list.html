@@ -3,10 +3,10 @@
 {% block title %}Assigned Appointments - CARVIX{% endblock %}
 
 {% block content %}
-<h1>Assigned Appointments</h1>
+<h1 class="page-title">Assigned Appointments</h1>
 
 {% if appointments %}
-    <ul>
+    <ul class="list-grid">
         {% for appointment in appointments %}
             <li>
                 <h2>
@@ -22,6 +22,6 @@
         {% endfor %}
     </ul>
 {% else %}
-    <p>You have no assigned appointments.</p>
+    <p class="empty-state">You have no assigned appointments.</p>
 {% endif %}
 {% endblock %}

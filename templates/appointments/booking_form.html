@@ -3,14 +3,14 @@
 {% block title %}Book a Service - CARVIX{% endblock %}
 
 {% block content %}
-<h1>Book a Service for {{ vehicle.license_plate }}</h1>
-<p>Submitting this form will create the appointment.</p>
+<h1 class="page-title">Book a Service for {{ vehicle.license_plate }}</h1>
+<p class="page-intro">Submitting this form will create the appointment.</p>
 
 {% if not has_available_slots %}
-    <p>No active future slots with remaining capacity are currently available.</p>
+    <p class="empty-state">No active future slots with remaining capacity are currently available.</p>
 {% endif %}
 
-<form method="post">
+<form method="post" class="form-card">
     {% csrf_token %}
 
     {% if form.non_field_errors %}
@@ -27,7 +27,7 @@
             {{ field }}
             {% if field.help_text %}<p>{{ field.help_text }}</p>{% endif %}
             {% if field.errors %}
-                <div class="errors" role="alert">
+                <div class="field-errors" role="alert">
                     {% for error in field.errors %}<p>{{ error }}</p>{% endfor %}
                 </div>
             {% endif %}
@@ -39,5 +39,5 @@
     </button>
 </form>
 
-<p><a href="{% url 'vehicles:vehicle-detail' vehicle.pk %}">Back to Vehicle</a></p>
+<p class="action-links"><a href="{% url 'vehicles:vehicle-detail' vehicle.pk %}">Back to Vehicle</a></p>
 {% endblock %}
