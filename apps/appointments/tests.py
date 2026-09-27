@@ -24,7 +24,13 @@ from django.urls import reverse
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
-from apps.maintenance.models import ServiceType, TechnicianProfile
+from apps.inventory.models import SparePart
+from apps.maintenance.models import (
+    MaintenancePart,
+    MaintenanceRecord,
+    ServiceType,
+    TechnicianProfile,
+)
 from apps.vehicles.models import Vehicle
 
 from .models import (
@@ -39,8 +45,11 @@ from .forms import AppointmentBookingForm, TechnicianAssignmentForm
 from .services import (
     AppointmentBookingError,
     TechnicianAssignmentError,
+    TechnicianMaintenanceError,
     assign_technician,
     book_appointment,
+    complete_appointment_maintenance,
+    start_appointment_service,
 )
 
 
@@ -1075,6 +1084,434 @@ class TechnicianAppointmentViewTests(AppointmentFixtures):
         self.assertEqual(Appointment.objects.count(), count)
 
 
+class TechnicianMaintenanceWorkflowTests(AppointmentFixtures):
+    def detail_url(self, appointment):
+        return reverse(
+            "appointments:technician-appointment-detail",
+            kwargs={"pk": appointment.pk},
+        )
+
+    def create_technician(self, username):
+        user = User.objects.create_user(
+            username=username,
+            email=f"{username}@example.com",
+            password="test-password",
+            role=User.Role.TECHNICIAN,
+        )
+        return TechnicianProfile.objects.create(user=user, specialization="General")
+
+    def start_url(self, appointment):
+        return reverse("appointments:technician-appointment-start", kwargs={"pk": appointment.pk})
+
+    def completion_url(self, appointment):
+        return reverse("appointments:technician-appointment-complete", kwargs={"pk": appointment.pk})
+
+    def part(self, **overrides):
+        values = {
+            "name": "Oil filter",
+            "part_number": "MAINT-FILTER",
+            "quantity": 10,
+            "minimum_stock": 1,
+            "unit_price": Decimal("5.25"),
+        }
+        values.update(overrides)
+        return SparePart.objects.create(**values)
+
+    def completion_data(self, *, mileage=550, notes="Oil and filter changed", usages=(), **extra):
+        data = {
+            "mileage_at_service": str(mileage),
+            "notes": notes,
+            "parts-TOTAL_FORMS": "10",
+            "parts-INITIAL_FORMS": "0",
+            "parts-MIN_NUM_FORMS": "0",
+            "parts-MAX_NUM_FORMS": "20",
+        }
+        for index, (part, quantity) in enumerate(usages):
+            data[f"parts-{index}-spare_part"] = str(part.pk if hasattr(part, "pk") else part)
+            data[f"parts-{index}-quantity_used"] = str(quantity)
+        data.update(extra)
+        return data
+
+    def test_start_service_allows_only_pending_and_confirmed(self):
+        self.client.force_login(self.tech_user)
+        for status in (AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED):
+            with self.subTest(source=status):
+                appointment = self.make_appointment(slot=self.make_slot(), status=status)
+                response = self.client.post(self.start_url(appointment))
+                self.assertRedirects(response, self.detail_url(appointment))
+                appointment.refresh_from_db()
+                self.assertEqual(appointment.status, AppointmentStatus.IN_PROGRESS)
+
+    def test_start_service_rejects_in_progress_completed_and_cancelled_without_other_changes(self):
+        self.client.force_login(self.tech_user)
+        for status in (
+            AppointmentStatus.IN_PROGRESS,
+            AppointmentStatus.COMPLETED,
+            AppointmentStatus.CANCELLED,
+        ):
+            with self.subTest(source=status):
+                appointment = self.make_appointment(
+                    slot=self.make_slot(), status=status, notes="preserve these notes"
+                )
+                response = self.client.post(self.start_url(appointment))
+                self.assertRedirects(response, self.detail_url(appointment))
+                appointment.refresh_from_db()
+                self.assertEqual(appointment.status, status)
+                self.assertEqual(appointment.notes, "preserve these notes")
+
+    def test_start_service_is_post_only_csrf_protected_and_get_is_read_only(self):
+        appointment = self.make_appointment()
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.tech_user)
+        response = client.get(self.start_url(appointment))
+        self.assertEqual(response.status_code, 405)
+        response = client.post(self.start_url(appointment))
+        self.assertEqual(response.status_code, 403)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, AppointmentStatus.PENDING)
+
+        detail = client.get(self.detail_url(appointment))
+        token = detail.cookies["csrftoken"].value
+        response = client.post(self.start_url(appointment), {"csrfmiddlewaretoken": token})
+        self.assertRedirects(response, self.detail_url(appointment))
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, AppointmentStatus.IN_PROGRESS)
+
+    def test_start_service_authorization_and_assignment_isolation(self):
+        appointment = self.make_appointment()
+        another_tech = self.create_technician("start-other-tech")
+        foreign = self.make_appointment(slot=self.make_slot(), technician=another_tech)
+        unassigned = self.make_appointment(slot=self.make_slot(), technician=None)
+        url = self.start_url(appointment)
+        self.assertEqual(self.client.post(url).status_code, 302)
+
+        admin = User.objects.create_user(
+            username="start-admin", email="start-admin@example.com",
+            password="test-password", role=User.Role.ADMINISTRATOR,
+        )
+        for user in (self.owner, admin):
+            self.client.force_login(user)
+            self.assertEqual(self.client.post(url).status_code, 403)
+
+        no_profile = User.objects.create_user(
+            username="start-no-profile", email="start-no-profile@example.com",
+            password="test-password", role=User.Role.TECHNICIAN,
+        )
+        self.client.force_login(no_profile)
+        self.assertEqual(self.client.post(url).status_code, 403)
+
+        self.client.force_login(self.tech_user)
+        for hidden in (foreign, unassigned):
+            response = self.client.post(self.start_url(hidden))
+            self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.client.post(self.start_url(self.make_appointment(slot=self.make_slot(), technician=None))).status_code, 404)
+        self.assertEqual(Appointment.objects.get(pk=foreign.pk).status, AppointmentStatus.PENDING)
+
+    def test_start_service_revalidates_status_after_lock(self):
+        appointment = self.make_appointment()
+        Appointment.objects.filter(pk=appointment.pk).update(status=AppointmentStatus.CANCELLED)
+        with self.assertRaises(TechnicianMaintenanceError) as raised:
+            start_appointment_service(actor=self.tech_user, appointment_id=appointment.pk)
+        self.assertEqual(raised.exception.code, "invalid_status")
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, AppointmentStatus.CANCELLED)
+
+    def test_completion_form_get_is_read_only_and_assignment_scoped(self):
+        appointment = self.make_appointment(status=AppointmentStatus.IN_PROGRESS)
+        self.client.force_login(self.tech_user)
+        response = self.client.get(self.completion_url(appointment))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "csrfmiddlewaretoken")
+        self.assertEqual(response.context["parts_formset"].total_form_count(), 10)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, AppointmentStatus.IN_PROGRESS)
+        self.assertEqual(MaintenanceRecord.objects.count(), 0)
+
+        another_tech = self.create_technician("completion-other-tech")
+        foreign = self.make_appointment(slot=self.make_slot(), technician=another_tech)
+        self.assertEqual(self.client.get(self.completion_url(foreign)).status_code, 404)
+        self.assertEqual(self.client.get(self.completion_url(self.make_appointment(slot=self.make_slot(), technician=None))).status_code, 404)
+        self.assertEqual(self.client.get(reverse("appointments:technician-appointment-complete", kwargs={"pk": 999999})).status_code, 404)
+
+    def test_completion_requires_technician_role_and_profile(self):
+        appointment = self.make_appointment(status=AppointmentStatus.IN_PROGRESS)
+        url = self.completion_url(appointment)
+        self.assertEqual(self.client.get(url).status_code, 302)
+        for user in (self.owner,):
+            self.client.force_login(user)
+            self.assertEqual(self.client.get(url).status_code, 403)
+            self.assertEqual(self.client.post(url, self.completion_data()).status_code, 403)
+        administrator = User.objects.create_user(
+            username="complete-admin", email="complete-admin@example.com",
+            password="test-password", role=User.Role.ADMINISTRATOR,
+        )
+        self.client.force_login(administrator)
+        self.assertEqual(self.client.get(url).status_code, 403)
+
+        no_profile = User.objects.create_user(
+            username="complete-no-profile", email="complete-no-profile@example.com",
+            password="test-password", role=User.Role.TECHNICIAN,
+        )
+        self.client.force_login(no_profile)
+        self.assertEqual(self.client.get(url).status_code, 403)
+        self.assertEqual(self.client.post(url, self.completion_data()).status_code, 403)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, AppointmentStatus.IN_PROGRESS)
+        self.assertFalse(appointment.maintenance_records.exists())
+
+    def test_completion_only_accepts_in_progress_status(self):
+        self.client.force_login(self.tech_user)
+        for status in (
+            AppointmentStatus.PENDING,
+            AppointmentStatus.CONFIRMED,
+            AppointmentStatus.COMPLETED,
+            AppointmentStatus.CANCELLED,
+        ):
+            with self.subTest(status=status):
+                appointment = self.make_appointment(slot=self.make_slot(), status=status)
+                response = self.client.post(
+                    self.completion_url(appointment),
+                    self.completion_data(mileage=600),
+                )
+                self.assertEqual(response.status_code, 200)
+                appointment.refresh_from_db()
+                self.assertEqual(appointment.status, status)
+                self.assertFalse(appointment.maintenance_records.exists())
+
+    def test_completion_requires_post_and_csrf(self):
+        appointment = self.make_appointment(status=AppointmentStatus.IN_PROGRESS)
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.tech_user)
+        self.assertEqual(client.get(self.completion_url(appointment)).status_code, 200)
+        self.assertEqual(client.post(self.completion_url(appointment), self.completion_data()).status_code, 403)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, AppointmentStatus.IN_PROGRESS)
+        self.assertFalse(appointment.maintenance_records.exists())
+
+        token = client.cookies["csrftoken"].value
+        response = client.post(
+            self.completion_url(appointment),
+            self.completion_data(mileage=560, csrfmiddlewaretoken=token),
+        )
+        self.assertRedirects(response, self.detail_url(appointment))
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, AppointmentStatus.COMPLETED)
+
+    def test_completion_derives_relationships_and_ignores_forged_ids(self):
+        appointment = self.make_appointment(status=AppointmentStatus.IN_PROGRESS)
+        other_vehicle = Vehicle.objects.create(
+            owner=self.owner, manufacturer="Honda", model="Civic", model_year=2020,
+            license_plate="FORGED-VEHICLE", current_mileage=100,
+        )
+        other_tech = self.create_technician("forged-tech")
+        self.client.force_login(self.tech_user)
+        response = self.client.post(
+            self.completion_url(appointment),
+            self.completion_data(
+                mileage=600, notes="Recorded work",
+                vehicle=str(other_vehicle.pk), technician=str(other_tech.pk),
+                appointment="999999", owner_id="999999", user_id="999999",
+            ),
+        )
+        self.assertRedirects(response, self.detail_url(appointment))
+        record = MaintenanceRecord.objects.get(appointment=appointment)
+        self.assertEqual(record.vehicle, appointment.vehicle)
+        self.assertEqual(record.service_type, appointment.service_type)
+        self.assertEqual(record.technician, self.technician)
+        self.assertEqual(record.mileage_at_service, 600)
+        self.assertEqual(record.notes, "Recorded work")
+        self.assertEqual(record.service_date, timezone.localdate())
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, AppointmentStatus.COMPLETED)
+
+    def test_completion_without_parts_and_with_multiple_parts(self):
+        self.client.force_login(self.tech_user)
+        without_parts = self.make_appointment(status=AppointmentStatus.IN_PROGRESS)
+        response = self.client.post(self.completion_url(without_parts), self.completion_data(mileage=550))
+        self.assertRedirects(response, self.detail_url(without_parts))
+        self.assertEqual(without_parts.maintenance_records.count(), 1)
+        self.assertEqual(without_parts.maintenance_records.get().maintenance_parts.count(), 0)
+
+        with_parts = self.make_appointment(slot=self.make_slot(), status=AppointmentStatus.IN_PROGRESS)
+        first = self.part(part_number="MULTI-1", quantity=5)
+        second = self.part(name="Oil", part_number="MULTI-2", quantity=4)
+        response = self.client.post(
+            self.completion_url(with_parts),
+            self.completion_data(mileage=560, usages=((first, 2), (second, 4))),
+        )
+        self.assertRedirects(response, self.detail_url(with_parts))
+        record = with_parts.maintenance_records.get()
+        self.assertEqual(set(record.maintenance_parts.values_list("spare_part_id", flat=True)), {first.pk, second.pk})
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.quantity, 3)
+        self.assertEqual(second.quantity, 0)
+
+    def test_invalid_parts_and_mileage_leave_everything_unchanged(self):
+        self.client.force_login(self.tech_user)
+        scenarios = (
+            ("duplicate", lambda part: ((part, 1), (part, 2))),
+            ("missing", lambda _part: ((999999, 1),)),
+            ("zero", lambda part: ((part, 0),)),
+            ("negative", lambda part: ((part, -1),)),
+            ("malformed", lambda part: ((part, "1.5"),)),
+            ("insufficient", lambda part: ((part, 11),)),
+        )
+        for index, (name, usage_factory) in enumerate(scenarios):
+            with self.subTest(name=name):
+                appointment = self.make_appointment(
+                    slot=self.make_slot(), status=AppointmentStatus.IN_PROGRESS
+                )
+                part = self.part(part_number=f"INVALID-{index}")
+                usages = usage_factory(part)
+                response = self.client.post(
+                    self.completion_url(appointment),
+                    self.completion_data(mileage=550, usages=usages),
+                )
+                self.assertEqual(response.status_code, 200)
+                appointment.refresh_from_db()
+                part.refresh_from_db()
+                self.assertEqual(appointment.status, AppointmentStatus.IN_PROGRESS)
+                self.assertFalse(appointment.maintenance_records.exists())
+                self.assertEqual(part.quantity, 10)
+                self.assertEqual(MaintenancePart.objects.count(), 0)
+
+    def test_negative_and_malformed_mileage_are_rejected(self):
+        appointment = self.make_appointment(status=AppointmentStatus.IN_PROGRESS)
+        self.client.force_login(self.tech_user)
+        for value in ("-1", "not-a-number", "1.5"):
+            with self.subTest(mileage=value):
+                response = self.client.post(
+                    self.completion_url(appointment),
+                    self.completion_data(mileage=value),
+                )
+                self.assertEqual(response.status_code, 200)
+                appointment.refresh_from_db()
+                self.assertEqual(appointment.status, AppointmentStatus.IN_PROGRESS)
+                self.assertFalse(appointment.maintenance_records.exists())
+
+    def test_lower_mileage_rejected_and_stock_never_partially_changes(self):
+        appointment = self.make_appointment(status=AppointmentStatus.IN_PROGRESS)
+        first = self.part(part_number="ROLLBACK-1", quantity=8)
+        second = self.part(part_number="ROLLBACK-2", quantity=1)
+        self.client.force_login(self.tech_user)
+        response = self.client.post(
+            self.completion_url(appointment),
+            self.completion_data(mileage=499, usages=((first, 3), (second, 2))),
+        )
+        self.assertEqual(response.status_code, 200)
+        appointment.refresh_from_db()
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(appointment.status, AppointmentStatus.IN_PROGRESS)
+        self.assertEqual(first.quantity, 8)
+        self.assertEqual(second.quantity, 1)
+        self.assertFalse(appointment.maintenance_records.exists())
+        self.assertEqual(MaintenancePart.objects.count(), 0)
+
+    def test_direct_service_rejects_non_integral_and_invalid_mileage_without_side_effects(self):
+        part = self.part(part_number="MILEAGE-INVALID", quantity=9)
+        rejected_values = (550.9, -0.5, True, "not-a-number", -1)
+
+        for index, value in enumerate(rejected_values):
+            with self.subTest(mileage=value):
+                appointment = self.make_appointment(
+                    slot=self.make_slot(), status=AppointmentStatus.IN_PROGRESS
+                )
+                with self.assertRaises(TechnicianMaintenanceError) as raised:
+                    complete_appointment_maintenance(
+                        actor=self.tech_user,
+                        appointment_id=appointment.pk,
+                        mileage_at_service=value,
+                        notes="Invalid mileage must not persist",
+                        parts=((part.pk, 1),),
+                    )
+                self.assertEqual(raised.exception.code, "invalid_mileage")
+                appointment.refresh_from_db()
+                part.refresh_from_db()
+                self.assertEqual(appointment.status, AppointmentStatus.IN_PROGRESS)
+                self.assertFalse(appointment.maintenance_records.exists())
+                self.assertEqual(MaintenancePart.objects.count(), 0)
+                self.assertEqual(part.quantity, 9)
+
+    def test_direct_service_accepts_integer_and_decimal_free_integer_string(self):
+        for index, value in enumerate((551, "552")):
+            with self.subTest(mileage=value):
+                appointment = self.make_appointment(
+                    slot=self.make_slot(), status=AppointmentStatus.IN_PROGRESS
+                )
+                record = complete_appointment_maintenance(
+                    actor=self.tech_user,
+                    appointment_id=appointment.pk,
+                    mileage_at_service=value,
+                )
+                self.assertEqual(record.mileage_at_service, 551 + index)
+                appointment.refresh_from_db()
+                self.assertEqual(appointment.status, AppointmentStatus.COMPLETED)
+
+    def test_direct_service_rejects_fractional_decimal_without_side_effects(self):
+        from decimal import Decimal
+
+        appointment = self.make_appointment(status=AppointmentStatus.IN_PROGRESS)
+        part = self.part(part_number="MILEAGE-DECIMAL", quantity=4)
+        with self.assertRaises(TechnicianMaintenanceError) as raised:
+            complete_appointment_maintenance(
+                actor=self.tech_user,
+                appointment_id=appointment.pk,
+                mileage_at_service=Decimal("550.9"),
+                parts=((part.pk, 2),),
+            )
+        self.assertEqual(raised.exception.code, "invalid_mileage")
+        appointment.refresh_from_db()
+        part.refresh_from_db()
+        self.assertEqual(appointment.status, AppointmentStatus.IN_PROGRESS)
+        self.assertFalse(appointment.maintenance_records.exists())
+        self.assertEqual(MaintenancePart.objects.count(), 0)
+        self.assertEqual(part.quantity, 4)
+
+    def test_unexpected_failure_after_record_creation_rolls_back_all_writes(self):
+        appointment = self.make_appointment(status=AppointmentStatus.IN_PROGRESS)
+        first = self.part(part_number="FAIL-A", quantity=8)
+        second = self.part(part_number="FAIL-B", quantity=8)
+        from apps.appointments import services
+
+        real_create = MaintenancePart.objects.create
+        calls = 0
+
+        def fail_on_second_part(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RuntimeError("simulated persistence failure")
+            return real_create(*args, **kwargs)
+
+        with patch.object(services.MaintenancePart.objects, "create", side_effect=fail_on_second_part):
+            with self.assertRaises(RuntimeError):
+                complete_appointment_maintenance(
+                    actor=self.tech_user,
+                    appointment_id=appointment.pk,
+                    mileage_at_service=550,
+                    notes="Must roll back",
+                    parts=((first.pk, 2), (second.pk, 3)),
+                )
+
+        appointment.refresh_from_db()
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(appointment.status, AppointmentStatus.IN_PROGRESS)
+        self.assertFalse(appointment.maintenance_records.exists())
+        self.assertEqual(MaintenancePart.objects.count(), 0)
+        self.assertEqual((first.quantity, second.quantity), (8, 8))
+
+    def test_completed_appointment_cannot_be_completed_twice(self):
+        appointment = self.make_appointment(status=AppointmentStatus.IN_PROGRESS)
+        self.client.force_login(self.tech_user)
+        self.assertEqual(self.client.post(self.completion_url(appointment), self.completion_data()).status_code, 302)
+        response = self.client.post(self.completion_url(appointment), self.completion_data())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(appointment.maintenance_records.count(), 1)
+
+
 @skipIf(not is_postgres, "Concurrent booking tests require PostgreSQL row locks")
 class AppointmentBookingConcurrencyTests(TransactionTestCase):
     def setUp(self):
@@ -1145,6 +1582,95 @@ class AppointmentBookingConcurrencyTests(TransactionTestCase):
             ).count(),
             1,
         )
+
+
+@skipIf(not is_postgres, "Concurrent completion tests require PostgreSQL row locks")
+class TechnicianCompletionConcurrencyTests(TransactionTestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="completion-concurrency-owner",
+            email="completion-concurrency-owner@example.com",
+            password="test-password",
+        )
+        tech_user = User.objects.create_user(
+            username="completion-concurrency-tech",
+            email="completion-concurrency-tech@example.com",
+            password="test-password",
+            role=User.Role.TECHNICIAN,
+        )
+        self.technician = TechnicianProfile.objects.create(
+            user=tech_user, specialization="General"
+        )
+        self.vehicle = Vehicle.objects.create(
+            owner=self.owner,
+            manufacturer="Toyota",
+            model="Yaris",
+            model_year=2021,
+            license_plate="CONCURRENT-COMPLETE",
+            current_mileage=500,
+        )
+        self.service_type = ServiceType.objects.create(
+            name="Concurrent completion service",
+            description="Test service",
+            interval_km=1000,
+            interval_months=3,
+            duration_minutes=30,
+            price=Decimal("10.00"),
+        )
+        slot = ServiceSlot.objects.create(
+            start_time=timezone.now() + timedelta(days=1),
+            end_time=timezone.now() + timedelta(days=1, minutes=30),
+            capacity=1,
+        )
+        self.appointment = Appointment.objects.create(
+            vehicle=self.vehicle,
+            service_type=self.service_type,
+            slot=slot,
+            technician=self.technician,
+            status=AppointmentStatus.IN_PROGRESS,
+        )
+        self.part = SparePart.objects.create(
+            name="Concurrent filter",
+            part_number="CONCURRENT-FILTER",
+            quantity=1,
+            minimum_stock=0,
+            unit_price=Decimal("5.00"),
+        )
+        self.tech_user_id = tech_user.pk
+
+    def test_concurrent_completion_creates_one_record_and_consumes_stock_once(self):
+        barrier = Barrier(2)
+
+        def attempt_completion():
+            close_old_connections()
+            try:
+                actor = User.objects.get(pk=self.tech_user_id)
+                barrier.wait(timeout=10)
+                record = complete_appointment_maintenance(
+                    actor=actor,
+                    appointment_id=self.appointment.pk,
+                    mileage_at_service=550,
+                    notes="Concurrent completion",
+                    parts=[(self.part.pk, 1)],
+                )
+                return ("completed", record.pk)
+            except TechnicianMaintenanceError as error:
+                return ("rejected", error.code)
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(lambda _index: attempt_completion(), range(2)))
+
+        self.assertCountEqual([outcome[0] for outcome in outcomes], ["completed", "rejected"])
+        self.assertEqual(
+            Appointment.objects.get(pk=self.appointment.pk).status,
+            AppointmentStatus.COMPLETED,
+        )
+        self.assertEqual(MaintenanceRecord.objects.filter(appointment=self.appointment).count(), 1)
+        self.assertEqual(MaintenancePart.objects.count(), 1)
+        self.part.refresh_from_db()
+        self.assertEqual(self.part.quantity, 0)
 
 
 class AppointmentModelTests(AppointmentFixtures):

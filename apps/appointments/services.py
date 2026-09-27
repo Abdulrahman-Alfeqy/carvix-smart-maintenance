@@ -1,8 +1,15 @@
 from django.db import IntegrityError, transaction
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from apps.authentication.models import User
-from apps.maintenance.models import ServiceType, TechnicianProfile
+from apps.inventory.models import SparePart
+from apps.maintenance.models import (
+    MaintenancePart,
+    MaintenanceRecord,
+    ServiceType,
+    TechnicianProfile,
+)
 from apps.vehicles.models import Vehicle
 
 from .models import ACTIVE_APPOINTMENT_STATUSES, Appointment, AppointmentStatus, ServiceSlot
@@ -35,6 +42,235 @@ class TechnicianAssignmentError(Exception):
     def __init__(self, message, code):
         super().__init__(message)
         self.code = code
+
+
+class TechnicianMaintenanceError(Exception):
+    """Safe, form-facing rejection for Technician service operations."""
+
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
+def _technician_appointment_id(value):
+    if isinstance(value, bool) or not (
+        isinstance(value, int)
+        or isinstance(value, str) and value.isascii() and value.isdecimal()
+    ):
+        raise TechnicianMaintenanceError(
+            "This Appointment is unavailable.", code="appointment_not_found"
+        )
+    try:
+        value = int(value)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise TechnicianMaintenanceError(
+            "This Appointment is unavailable.", code="appointment_not_found"
+        ) from error
+    if value <= 0:
+        raise TechnicianMaintenanceError(
+            "This Appointment is unavailable.", code="appointment_not_found"
+        )
+    return value
+
+
+def _assigned_appointment_for_update(*, actor, appointment_id):
+    if not getattr(actor, "is_authenticated", False) or getattr(actor, "role", None) != User.Role.TECHNICIAN:
+        raise TechnicianMaintenanceError(
+            "Only the assigned Technician can update this Appointment.",
+            code="permission_denied",
+        )
+    try:
+        technician = actor.technician_profile
+    except TechnicianProfile.DoesNotExist as error:
+        raise TechnicianMaintenanceError(
+            "A Technician profile is required.", code="permission_denied"
+        ) from error
+    appointment_id = _technician_appointment_id(appointment_id)
+    appointment = (
+        Appointment.objects.select_for_update()
+        .filter(pk=appointment_id, technician=technician)
+        .select_related("vehicle", "service_type", "technician")
+        .first()
+    )
+    if appointment is None:
+        raise TechnicianMaintenanceError(
+            "This Appointment is unavailable.", code="appointment_not_found"
+        )
+    return appointment, technician
+
+
+def start_appointment_service(*, actor, appointment_id):
+    """Move an assigned Appointment from PENDING/CONFIRMED to IN_PROGRESS."""
+    with transaction.atomic():
+        appointment, _technician = _assigned_appointment_for_update(
+            actor=actor, appointment_id=appointment_id
+        )
+        if appointment.status not in (AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED):
+            raise TechnicianMaintenanceError(
+                "This Appointment cannot be started from its current status.",
+                code="invalid_status",
+            )
+        appointment.status = AppointmentStatus.IN_PROGRESS
+        appointment.save(update_fields=("status",))
+        return appointment
+
+
+def complete_appointment_maintenance(
+    *, actor, appointment_id, mileage_at_service, notes="", parts=()
+):
+    """Atomically record completed work and reduce inventory for an assigned Appointment."""
+    with transaction.atomic():
+        appointment, technician = _assigned_appointment_for_update(
+            actor=actor, appointment_id=appointment_id
+        )
+        if appointment.status != AppointmentStatus.IN_PROGRESS:
+            raise TechnicianMaintenanceError(
+                "Only an in-progress Appointment can be completed.",
+                code="invalid_status",
+            )
+        if appointment.maintenance_records.exists():
+            raise TechnicianMaintenanceError(
+                "This Appointment already has a maintenance record.",
+                code="already_completed",
+            )
+
+        if isinstance(mileage_at_service, bool):
+            raise TechnicianMaintenanceError(
+                "Enter a valid service mileage.", code="invalid_mileage"
+            )
+        if isinstance(mileage_at_service, int):
+            mileage = mileage_at_service
+        elif isinstance(mileage_at_service, str):
+            mileage_text = mileage_at_service.strip()
+            digits = mileage_text[1:] if mileage_text[:1] in {"+", "-"} else mileage_text
+            if not digits or not digits.isascii() or not digits.isdecimal():
+                raise TechnicianMaintenanceError(
+                    "Enter a valid service mileage.", code="invalid_mileage"
+                )
+            mileage = int(mileage_text)
+        else:
+            raise TechnicianMaintenanceError(
+                "Enter a valid service mileage.", code="invalid_mileage"
+            )
+        if mileage < 0:
+            raise TechnicianMaintenanceError(
+                "Mileage cannot be negative.", code="invalid_mileage"
+            )
+        if mileage < appointment.vehicle.current_mileage:
+            raise TechnicianMaintenanceError(
+                "Service mileage cannot be lower than the vehicle's accepted mileage.",
+                code="mileage_below_current",
+            )
+        if not isinstance(notes, str):
+            raise TechnicianMaintenanceError(
+                "Enter valid maintenance notes.", code="invalid_notes"
+            )
+
+        normalized_parts = []
+        seen_ids = set()
+        try:
+            submitted_parts = list(parts)
+        except TypeError as error:
+            raise TechnicianMaintenanceError(
+                "Enter valid SparePart usage.", code="invalid_parts"
+            ) from error
+        for entry in submitted_parts:
+            if not isinstance(entry, (tuple, list)) or len(entry) != 2:
+                raise TechnicianMaintenanceError(
+                    "Enter valid SparePart usage.", code="invalid_parts"
+                )
+            part_id, quantity = entry
+            if isinstance(part_id, bool) or not (
+                isinstance(part_id, int)
+                or isinstance(part_id, str) and part_id.isascii() and part_id.isdecimal()
+            ):
+                raise TechnicianMaintenanceError(
+                    "Choose a valid SparePart.", code="invalid_part"
+                )
+            try:
+                part_id = int(part_id)
+            except (TypeError, ValueError, OverflowError) as error:
+                raise TechnicianMaintenanceError(
+                    "Choose a valid SparePart.", code="invalid_part"
+                ) from error
+            if part_id <= 0 or part_id in seen_ids:
+                raise TechnicianMaintenanceError(
+                    "Each SparePart may be listed only once.", code="duplicate_part"
+                )
+            seen_ids.add(part_id)
+            if isinstance(quantity, bool) or not (
+                isinstance(quantity, int)
+                or isinstance(quantity, str) and quantity.isascii() and quantity.isdecimal()
+            ):
+                raise TechnicianMaintenanceError(
+                    "Enter a positive whole-number quantity for each SparePart.",
+                    code="invalid_quantity",
+                )
+            try:
+                quantity = int(quantity)
+            except (TypeError, ValueError, OverflowError) as error:
+                raise TechnicianMaintenanceError(
+                    "Enter a positive whole-number quantity for each SparePart.",
+                    code="invalid_quantity",
+                ) from error
+            if quantity <= 0:
+                raise TechnicianMaintenanceError(
+                    "Enter a positive whole-number quantity for each SparePart.",
+                    code="invalid_quantity",
+                )
+            normalized_parts.append((part_id, quantity))
+
+        part_ids = [part_id for part_id, _quantity in normalized_parts]
+        locked_parts = list(
+            SparePart.objects.select_for_update().filter(pk__in=part_ids).order_by("pk")
+        )
+        parts_by_id = {part.pk: part for part in locked_parts}
+        if len(parts_by_id) != len(part_ids):
+            raise TechnicianMaintenanceError(
+                "One or more selected SpareParts are unavailable.", code="part_not_found"
+            )
+        for part_id, quantity in normalized_parts:
+            part = parts_by_id[part_id]
+            if part.quantity < quantity:
+                raise TechnicianMaintenanceError(
+                    f"Insufficient stock for {part.name}.", code="insufficient_stock"
+                )
+
+        record = MaintenanceRecord(
+            vehicle=appointment.vehicle,
+            service_type=appointment.service_type,
+            technician=technician,
+            appointment=appointment,
+            service_date=timezone.localdate(),
+            mileage_at_service=mileage,
+            notes=notes,
+        )
+        try:
+            record.full_clean()
+        except ValidationError as error:
+            raise TechnicianMaintenanceError(
+                "The maintenance details are invalid.", code="invalid_record"
+            ) from error
+        record.save()
+
+        for part_id, quantity in normalized_parts:
+            part = parts_by_id[part_id]
+            MaintenancePart.objects.create(
+                maintenance_record=record,
+                spare_part=part,
+                quantity_used=quantity,
+            )
+            part.quantity -= quantity
+            part.save(update_fields=("quantity",))
+
+        appointment.status = AppointmentStatus.COMPLETED
+        appointment.save(update_fields=("status",))
+        appointment.refresh_from_db(fields=("status",))
+        if appointment.status != AppointmentStatus.COMPLETED:
+            raise TechnicianMaintenanceError(
+                "Maintenance completion could not be saved.", code="completion_failed"
+            )
+        return record
 
 
 def _assignment_id(value, *, label):
