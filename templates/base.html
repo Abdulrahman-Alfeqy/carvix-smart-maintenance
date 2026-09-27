@@ -18,6 +18,7 @@
                 <a href="{% url 'authentication:profile_edit' %}">Edit Profile</a>
                 {% if user.role == "OWNER" %}
                     <a href="{% url 'vehicles:vehicle-list' %}">Vehicles</a>
+                    <a href="{% url 'appointments:appointment-list' %}">Appointments</a>
                 {% endif %}
             {% else %}
                 <a href="{% url 'authentication:login' %}">Login</a>

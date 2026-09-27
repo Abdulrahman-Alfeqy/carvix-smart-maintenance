@@ -3,13 +3,43 @@ from django.contrib import messages
 from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
 from django.urls import reverse_lazy
-from django.views.generic import FormView
+from django.views.generic import DetailView, FormView, ListView
 
 from apps.vehicles.models import Vehicle
 from apps.vehicles.views import OwnerRequiredMixin
 
 from .forms import AppointmentBookingForm
+from .models import Appointment
 from .services import AppointmentBookingError, book_appointment
+
+
+class OwnerAppointmentQuerysetMixin:
+    """Keep appointment reads within the authenticated Owner's vehicles."""
+
+    def get_queryset(self):
+        return (
+            Appointment.objects.filter(vehicle__owner=self.request.user)
+            .select_related("vehicle", "service_type", "slot")
+        )
+
+
+class OwnerAppointmentListView(
+    LoginRequiredMixin, OwnerRequiredMixin, OwnerAppointmentQuerysetMixin, ListView
+):
+    template_name = "appointments/appointment_list.html"
+    context_object_name = "appointments"
+    login_url = reverse_lazy("authentication:login")
+
+
+class OwnerAppointmentDetailView(
+    LoginRequiredMixin, OwnerRequiredMixin, OwnerAppointmentQuerysetMixin, DetailView
+):
+    template_name = "appointments/appointment_detail.html"
+    context_object_name = "appointment"
+    login_url = reverse_lazy("authentication:login")
+
+    def get_queryset(self):
+        return super().get_queryset().select_related("technician__user")
 
 
 class AppointmentBookingView(LoginRequiredMixin, OwnerRequiredMixin, FormView):
