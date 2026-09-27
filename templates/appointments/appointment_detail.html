@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}Appointment {{ appointment.pk }} - CARVIX{% endblock %}
+
+{% block content %}
+<h1>Appointment {{ appointment.pk }}</h1>
+
+<dl>
+    <dt>Vehicle</dt>
+    <dd>{{ appointment.vehicle.manufacturer }} {{ appointment.vehicle.model }} ({{ appointment.vehicle.license_plate }})</dd>
+    <dt>Service</dt>
+    <dd>{{ appointment.service_type.name }}</dd>
+    <dt>Scheduled start</dt>
+    <dd>{{ appointment.slot.start_time }}</dd>
+    <dt>Scheduled end</dt>
+    <dd>{{ appointment.slot.end_time }}</dd>
+    <dt>Status</dt>
+    <dd>{{ appointment.get_status_display }}</dd>
+    {% if appointment.notes %}
+        <dt>Notes</dt>
+        <dd>{{ appointment.notes }}</dd>
+    {% endif %}
+</dl>
+
+<p><a href="{% url 'appointments:appointment-list' %}">Back to Appointments</a></p>
+{% endblock %}

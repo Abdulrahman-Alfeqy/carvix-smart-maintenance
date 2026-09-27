@@ -503,6 +503,129 @@ class AppointmentBookingViewTests(AppointmentFixtures):
         self.assertEqual(response.status_code, 403)
 
 
+class OwnerAppointmentViewTests(AppointmentFixtures):
+    def setUp(self):
+        super().setUp()
+        self.list_url = reverse("appointments:appointment-list")
+
+    def create_other_owner_appointment(self):
+        other_owner = User.objects.create_user(
+            username="list-other-owner",
+            email="list-other-owner@example.com",
+            password="test-password",
+        )
+        other_vehicle = Vehicle.objects.create(
+            owner=other_owner,
+            manufacturer="Honda",
+            model="Civic",
+            model_year=2020,
+            license_plate="LIST-OTHER-OWNER",
+            current_mileage=100,
+        )
+        return self.make_appointment(
+            vehicle=other_vehicle,
+            status=AppointmentStatus.CANCELLED,
+            notes="private other-owner appointment note",
+        )
+
+    def test_anonymous_list_and_detail_requests_redirect_to_login(self):
+        detail_url = reverse(
+            "appointments:appointment-detail", kwargs={"pk": self.make_appointment().pk}
+        )
+        for url in (self.list_url, detail_url):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 302)
+                self.assertIn(reverse("authentication:login"), response.url)
+
+    def test_technician_and_administrator_receive_403_on_list_and_detail(self):
+        appointment = self.make_appointment()
+        detail_url = reverse(
+            "appointments:appointment-detail", kwargs={"pk": appointment.pk}
+        )
+        administrator = User.objects.create_user(
+            username="appointment-view-admin",
+            email="appointment-view-admin@example.com",
+            password="test-password",
+            role=User.Role.ADMINISTRATOR,
+        )
+
+        for user in (self.tech_user, administrator):
+            self.client.force_login(user)
+            for url in (self.list_url, detail_url):
+                with self.subTest(user=user.role, url=url):
+                    self.assertEqual(self.client.get(url).status_code, 403)
+
+    def test_owner_list_contains_only_owned_appointments_in_model_order(self):
+        earlier = self.make_appointment(
+            status=AppointmentStatus.CANCELLED,
+            notes="owner earlier appointment",
+        )
+        later = self.make_appointment(
+            slot=self.make_slot(),
+            status=AppointmentStatus.CANCELLED,
+            notes="owner later appointment",
+        )
+        foreign = self.create_other_owner_appointment()
+        self.client.force_login(self.owner)
+
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            list(response.context["appointments"]), [later, earlier]
+        )
+        self.assertContains(response, f"Appointment {earlier.pk}")
+        self.assertContains(response, f"Appointment {later.pk}")
+        self.assertNotContains(response, f"Appointment {foreign.pk}")
+        self.assertNotContains(response, foreign.notes)
+
+    def test_owner_can_view_own_detail_and_query_owner_id_does_not_change_scope(self):
+        appointment = self.make_appointment(notes="owner appointment detail note")
+        self.client.force_login(self.owner)
+
+        response = self.client.get(
+            reverse("appointments:appointment-detail", kwargs={"pk": appointment.pk}),
+            {"owner_id": "999999"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["appointment"], appointment)
+        self.assertContains(response, appointment.vehicle.license_plate)
+        self.assertContains(response, appointment.service_type.name)
+        self.assertContains(response, appointment.notes)
+
+    def test_cross_owner_detail_returns_404_without_disclosing_appointment_data(self):
+        foreign = self.create_other_owner_appointment()
+        self.client.force_login(self.owner)
+
+        response = self.client.get(
+            reverse("appointments:appointment-detail", kwargs={"pk": foreign.pk})
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertNotContains(response, foreign.vehicle.license_plate, status_code=404)
+        self.assertNotContains(response, foreign.notes, status_code=404)
+
+    def test_read_only_endpoints_reject_post_and_get_does_not_mutate(self):
+        appointment = self.make_appointment()
+        detail_url = reverse(
+            "appointments:appointment-detail", kwargs={"pk": appointment.pk}
+        )
+        original_status = appointment.status
+        self.client.force_login(self.owner)
+
+        for url in (self.list_url, detail_url):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.post(url).status_code, 405)
+
+        self.client.get(self.list_url)
+        self.client.get(detail_url)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, original_status)
+        self.assertEqual(Appointment.objects.count(), 1)
+
+
 @skipIf(not is_postgres, "Concurrent booking tests require PostgreSQL row locks")
 class AppointmentBookingConcurrencyTests(TransactionTestCase):
     def setUp(self):
