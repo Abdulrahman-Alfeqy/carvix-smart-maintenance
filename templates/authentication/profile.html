@@ -3,9 +3,9 @@
 {% block title %}Profile - CARVIX{% endblock %}
 
 {% block content %}
-<h1>Profile</h1>
+<h1 class="page-title">Profile</h1>
 
-<div>
+<div class="detail-grid">
     <p><strong>Username:</strong> {{ user.username }}</p>
     <p><strong>Email:</strong> {{ user.email }}</p>
     <p><strong>First Name:</strong> {{ user.first_name|default:"-" }}</p>
@@ -13,5 +13,28 @@
     <p><strong>Role:</strong> {{ user.get_role_display }}</p>
 </div>
 
-<a href="{% url 'authentication:profile_edit' %}">Edit Profile</a>
+<div class="action-links">
+    <a class="button" href="{% url 'authentication:profile_edit' %}">Edit Profile</a>
+</div>
+
+<section class="page-section" aria-labelledby="role-entry-heading">
+    <h2 id="role-entry-heading">Your CARVIX workspace</h2>
+    {% if user.role == "OWNER" %}
+        <ul class="list-grid">
+            <li><h3>Your vehicles</h3><p>View vehicle details and maintenance guidance.</p><a href="{% url 'vehicles:vehicle-list' %}">Open Vehicles</a></li>
+            <li><h3>Your appointments</h3><p>Review scheduled services for your vehicles.</p><a href="{% url 'appointments:appointment-list' %}">Open Appointments</a></li>
+        </ul>
+    {% elif user.role == "TECHNICIAN" %}
+        <ul class="list-grid">
+            <li><h3>Assigned work</h3><p>Review appointments assigned to you.</p><a href="{% url 'appointments:technician-appointment-list' %}">Open Assigned Appointments</a></li>
+        </ul>
+    {% elif user.role == "ADMINISTRATOR" %}
+        <ul class="list-grid">
+            <li><h3>Technician assignments</h3><p>Review appointments awaiting assignment.</p><a href="{% url 'appointments:administrator-assignment-list' %}">Open Technician Assignments</a></li>
+            {% if user.is_staff and perms.ai_agent.view_agentactionlog %}
+                <li><h3>Agent activity</h3><p>Inspect recorded activity in the read-only Django Admin.</p><a href="{% url 'admin:ai_agent_agentactionlog_changelist' %}">Inspect AgentActionLog</a></li>
+            {% endif %}
+        </ul>
+    {% endif %}
+</section>
 {% endblock %}

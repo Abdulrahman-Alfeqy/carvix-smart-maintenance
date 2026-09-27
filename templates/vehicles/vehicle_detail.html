@@ -3,9 +3,9 @@
 {% block title %}{{ vehicle.license_plate }} - CARVIX{% endblock %}
 
 {% block content %}
-<h1>{{ vehicle.manufacturer }} {{ vehicle.model }}</h1>
+<h1 class="page-title">{{ vehicle.manufacturer }} {{ vehicle.model }}</h1>
 
-<dl>
+<dl class="detail-grid">
     <dt>Model year</dt>
     <dd>{{ vehicle.model_year }}</dd>
     <dt>License plate</dt>
@@ -14,14 +14,16 @@
     <dd>{{ vehicle.current_mileage }}</dd>
 </dl>
 
-<p><a href="{% url 'vehicles:vehicle-update' vehicle.pk %}">Update Vehicle</a></p>
-<p><a href="{% url 'appointments:book' vehicle.pk %}">Book a Service</a></p>
-<p><a href="{% url 'vehicles:vehicle-list' %}">Back to Vehicles</a></p>
+<div class="action-links">
+    <a class="button" href="{% url 'vehicles:vehicle-update' vehicle.pk %}">Update Vehicle</a>
+    <a class="button" href="{% url 'appointments:book' vehicle.pk %}">Book a Service</a>
+    <a href="{% url 'vehicles:vehicle-list' %}">Back to Vehicles</a>
+</div>
 
-<section aria-labelledby="maintenance-history-heading">
+<section class="page-section" aria-labelledby="maintenance-history-heading">
     <h2 id="maintenance-history-heading">Maintenance History</h2>
     {% if maintenance_history %}
-        <ul>
+        <ul class="list-grid">
             {% for record in maintenance_history %}
                 <li>
                     <h3>{{ record.service_type.name }}</h3>
@@ -43,14 +45,14 @@
             {% endfor %}
         </ul>
     {% else %}
-        <p>No maintenance history is recorded for this vehicle.</p>
+        <p class="empty-state">No maintenance history is recorded for this vehicle.</p>
     {% endif %}
 </section>
 
-<section aria-labelledby="due-service-heading">
+<section class="page-section" aria-labelledby="due-service-heading">
     <h2 id="due-service-heading">Due-Service Overview</h2>
     {% if due_services %}
-        <ul>
+        <ul class="list-grid">
             {% for result in due_services %}
                 <li>
                     <h3>{{ result.service_type.name }}</h3>
@@ -67,7 +69,7 @@
             {% endfor %}
         </ul>
     {% else %}
-        <p>No service types are configured.</p>
+        <p class="empty-state">No service types are configured.</p>
     {% endif %}
 </section>
 {% endblock %}

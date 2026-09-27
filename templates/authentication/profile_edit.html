@@ -3,13 +3,13 @@
 {% block title %}Edit Profile - CARVIX{% endblock %}
 
 {% block content %}
-<h1>Edit Profile</h1>
+<h1 class="page-title">Edit Profile</h1>
 
-<form method="post">
+<form method="post" class="form-card">
     {% csrf_token %}
 
     {% if form.non_field_errors %}
-        <div class="errors">
+        <div class="errors" role="alert">
             {% for error in form.non_field_errors %}
                 <div class="error">{{ error }}</div>
             {% endfor %}
@@ -20,7 +20,7 @@
         <label for="{{ form.email.id_for_label }}">Email:</label>
         {{ form.email }}
         {% if form.email.errors %}
-            <div class="errors">
+            <div class="field-errors" role="alert">
                 {% for error in form.email.errors %}
                     <div class="error">{{ error }}</div>
                 {% endfor %}
@@ -32,7 +32,7 @@
         <label for="{{ form.first_name.id_for_label }}">First Name:</label>
         {{ form.first_name }}
         {% if form.first_name.errors %}
-            <div class="errors">
+            <div class="field-errors" role="alert">
                 {% for error in form.first_name.errors %}
                     <div class="error">{{ error }}</div>
                 {% endfor %}
@@ -44,7 +44,7 @@
         <label for="{{ form.last_name.id_for_label }}">Last Name:</label>
         {{ form.last_name }}
         {% if form.last_name.errors %}
-            <div class="errors">
+            <div class="field-errors" role="alert">
                 {% for error in form.last_name.errors %}
                     <div class="error">{{ error }}</div>
                 {% endfor %}
@@ -55,5 +55,5 @@
     <button type="submit">Save Changes</button>
 </form>
 
-<a href="{% url 'authentication:profile' %}">Back to Profile</a>
+<div class="action-links"><a href="{% url 'authentication:profile' %}">Back to Profile</a></div>
 {% endblock %}

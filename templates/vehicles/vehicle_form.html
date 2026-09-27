@@ -3,13 +3,13 @@
 {% block title %}{% if form.instance.pk %}Update Vehicle{% else %}Add Vehicle{% endif %} - CARVIX{% endblock %}
 
 {% block content %}
-<h1>{% if form.instance.pk %}Update Vehicle{% else %}Add Vehicle{% endif %}</h1>
+<h1 class="page-title">{% if form.instance.pk %}Update Vehicle{% else %}Add Vehicle{% endif %}</h1>
 
-<form method="post">
+<form method="post" class="form-card">
     {% csrf_token %}
 
     {% if form.non_field_errors %}
-        <div class="errors">
+        <div class="errors" role="alert">
             {% for error in form.non_field_errors %}
                 <div class="error">{{ error }}</div>
             {% endfor %}
@@ -21,7 +21,7 @@
             <label for="{{ field.id_for_label }}">{{ field.label }}:</label>
             {{ field }}
             {% if field.errors %}
-                <div class="errors">
+                <div class="field-errors" role="alert">
                     {% for error in field.errors %}
                         <div class="error">{{ error }}</div>
                     {% endfor %}
@@ -33,5 +33,5 @@
     <button type="submit">Save Vehicle</button>
 </form>
 
-<p><a href="{% url 'vehicles:vehicle-list' %}">Back to Vehicles</a></p>
+<p class="action-links"><a href="{% url 'vehicles:vehicle-list' %}">Back to Vehicles</a></p>
 {% endblock %}
