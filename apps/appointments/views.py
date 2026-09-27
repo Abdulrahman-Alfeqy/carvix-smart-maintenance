@@ -1,16 +1,83 @@
-from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib import messages
-from django.shortcuts import get_object_or_404
-from django.shortcuts import redirect
+from django.http import Http404
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
 from django.views.generic import DetailView, FormView, ListView
 
+from apps.authentication.models import User
 from apps.vehicles.models import Vehicle
 from apps.vehicles.views import OwnerRequiredMixin
 
-from .forms import AppointmentBookingForm
+from .forms import AppointmentBookingForm, TechnicianAssignmentForm
 from .models import Appointment
-from .services import AppointmentBookingError, book_appointment
+from .services import (
+    AppointmentBookingError,
+    TechnicianAssignmentError,
+    assign_technician,
+    book_appointment,
+)
+
+
+class AdministratorRequiredMixin(UserPassesTestMixin):
+    """Restrict assignment endpoints to the CARVIX Administrator role."""
+
+    def test_func(self):
+        return self.request.user.role == User.Role.ADMINISTRATOR
+
+
+class AdministratorAppointmentAssignmentListView(
+    LoginRequiredMixin, AdministratorRequiredMixin, ListView
+):
+    template_name = "appointments/administrator_assignment_list.html"
+    context_object_name = "appointments"
+    login_url = reverse_lazy("authentication:login")
+
+    def get_queryset(self):
+        return (
+            Appointment.objects.filter(technician__isnull=True)
+            .select_related("vehicle", "service_type", "slot")
+        )
+
+
+class AdministratorAppointmentAssignmentView(
+    LoginRequiredMixin, AdministratorRequiredMixin, FormView
+):
+    form_class = TechnicianAssignmentForm
+    template_name = "appointments/administrator_assignment_form.html"
+    login_url = reverse_lazy("authentication:login")
+
+    def get_appointment(self):
+        return get_object_or_404(
+            Appointment.objects.filter(technician__isnull=True).select_related(
+                "vehicle", "service_type", "slot"
+            ),
+            pk=self.kwargs["appointment_pk"],
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["appointment"] = self.get_appointment()
+        return context
+
+    def form_valid(self, form):
+        try:
+            appointment = assign_technician(
+                actor=self.request.user,
+                appointment_id=self.kwargs["appointment_pk"],
+                technician_profile_id=form.cleaned_data["technician"].pk,
+            )
+        except TechnicianAssignmentError as error:
+            if error.code in {"appointment_not_found", "already_assigned"}:
+                raise Http404 from error
+            form.add_error(None, str(error))
+            return self.form_invalid(form)
+
+        messages.success(
+            self.request,
+            f"Technician assigned to Appointment {appointment.pk}.",
+        )
+        return redirect("appointments:administrator-assignment-list")
 
 
 class OwnerAppointmentQuerysetMixin:

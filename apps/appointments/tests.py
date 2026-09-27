@@ -34,8 +34,13 @@ from .models import (
     ServiceSlot,
 )
 from .selectors import get_available_service_slots
-from .forms import AppointmentBookingForm
-from .services import AppointmentBookingError, book_appointment
+from .forms import AppointmentBookingForm, TechnicianAssignmentForm
+from .services import (
+    AppointmentBookingError,
+    TechnicianAssignmentError,
+    assign_technician,
+    book_appointment,
+)
 
 
 User = get_user_model()
@@ -501,6 +506,219 @@ class AppointmentBookingViewTests(AppointmentFixtures):
         )
 
         self.assertEqual(response.status_code, 403)
+
+
+class AdministratorAssignmentViewTests(AppointmentFixtures):
+    def setUp(self):
+        super().setUp()
+        self.list_url = reverse("appointments:administrator-assignment-list")
+
+    def create_administrator(self):
+        return User.objects.create_user(
+            username="assignment-admin",
+            email="assignment-admin@example.com",
+            password="test-password",
+            role=User.Role.ADMINISTRATOR,
+            is_staff=False,
+            is_superuser=False,
+        )
+
+    def assignment_url(self, appointment):
+        return reverse(
+            "appointments:administrator-appointment-assign",
+            kwargs={"appointment_pk": appointment.pk},
+        )
+
+    def test_anonymous_requests_redirect_to_login(self):
+        appointment = self.make_appointment(technician=None)
+        for url in (self.list_url, self.assignment_url(appointment)):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 302)
+                self.assertIn(reverse("authentication:login"), response.url)
+
+    def test_only_domain_administrator_can_access_endpoints(self):
+        appointment = self.make_appointment(technician=None)
+        self.owner.is_staff = True
+        self.owner.save(update_fields=("is_staff",))
+        self.tech_user.is_staff = True
+        self.tech_user.save(update_fields=("is_staff",))
+
+        for user in (self.owner, self.tech_user):
+            self.client.force_login(user)
+            for method, url in (
+                ("get", self.list_url),
+                ("get", self.assignment_url(appointment)),
+                ("post", self.assignment_url(appointment)),
+            ):
+                with self.subTest(role=user.role, method=method, url=url):
+                    response = getattr(self.client, method)(url)
+                    self.assertEqual(response.status_code, 403)
+
+        administrator = self.create_administrator()
+        self.client.force_login(administrator)
+        self.assertEqual(self.client.get(self.list_url).status_code, 200)
+        self.assertEqual(self.client.get(self.assignment_url(appointment)).status_code, 200)
+
+    def test_get_is_read_only_and_lists_only_unassigned_appointments(self):
+        appointment = self.make_appointment(technician=None, status=AppointmentStatus.CONFIRMED)
+        assigned = self.make_appointment(
+            slot=self.make_slot(), technician=self.technician
+        )
+        administrator = self.create_administrator()
+        self.client.force_login(administrator)
+
+        list_response = self.client.get(self.list_url)
+        form_response = self.client.get(self.assignment_url(appointment))
+
+        self.assertEqual(list_response.status_code, 200)
+        self.assertContains(list_response, f"Appointment {appointment.pk}")
+        self.assertNotContains(list_response, f"Appointment {assigned.pk}")
+        self.assertEqual(form_response.status_code, 200)
+        appointment.refresh_from_db()
+        self.assertIsNone(appointment.technician_id)
+        self.assertEqual(appointment.status, AppointmentStatus.CONFIRMED)
+
+    def test_nonexistent_or_already_assigned_appointment_is_not_assignable(self):
+        administrator = self.create_administrator()
+        self.client.force_login(administrator)
+
+        self.assertEqual(
+            self.client.get(
+                reverse(
+                    "appointments:administrator-appointment-assign",
+                    kwargs={"appointment_pk": 999999},
+                )
+            ).status_code,
+            404,
+        )
+
+        assigned = self.make_appointment(technician=self.technician)
+        self.assertEqual(self.client.get(self.assignment_url(assigned)).status_code, 404)
+        with self.assertRaises(TechnicianAssignmentError) as raised:
+            assign_technician(
+                actor=administrator,
+                appointment_id=assigned.pk,
+                technician_profile_id=self.technician.pk,
+            )
+        self.assertEqual(raised.exception.code, "already_assigned")
+
+    def test_csrf_is_required_for_assignment_post(self):
+        appointment = self.make_appointment(technician=None)
+        administrator = self.create_administrator()
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(administrator)
+
+        response = csrf_client.post(
+            self.assignment_url(appointment),
+            {
+                "technician": str(self.technician.pk),
+                "confirm_assignment": "on",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        appointment.refresh_from_db()
+        self.assertIsNone(appointment.technician_id)
+
+    def test_confirmed_csrf_post_assigns_only_technician_and_preserves_other_fields(self):
+        appointment = self.make_appointment(
+            technician=None,
+            status=AppointmentStatus.IN_PROGRESS,
+            notes="preserve these appointment notes",
+            booked_by_agent=True,
+        )
+        original_values = {
+            "vehicle_id": appointment.vehicle_id,
+            "service_type_id": appointment.service_type_id,
+            "slot_id": appointment.slot_id,
+            "status": appointment.status,
+            "notes": appointment.notes,
+            "booked_by_agent": appointment.booked_by_agent,
+        }
+        administrator = self.create_administrator()
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(administrator)
+        form_response = csrf_client.get(self.assignment_url(appointment))
+        csrf_token = form_response.cookies["csrftoken"].value
+
+        self.assertEqual(form_response.status_code, 200)
+        self.assertContains(form_response, "Confirm Assignment")
+        response = csrf_client.post(
+            self.assignment_url(appointment),
+            {
+                "technician": str(self.technician.pk),
+                "confirm_assignment": "on",
+                "csrfmiddlewaretoken": csrf_token,
+                "user_id": "999999",
+                "administrator_id": "999999",
+                "status": AppointmentStatus.COMPLETED,
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.technician_id, self.technician.pk)
+        for field, value in original_values.items():
+            self.assertEqual(getattr(appointment, field), value)
+
+    def test_owner_and_administrator_profiles_are_rejected_as_technicians(self):
+        administrator = self.create_administrator()
+        owner_profile = TechnicianProfile.objects.create(
+            user=self.owner,
+            specialization="Invalid Owner profile",
+        )
+        administrator_profile = TechnicianProfile.objects.create(
+            user=administrator,
+            specialization="Invalid Administrator profile",
+        )
+
+        for profile in (owner_profile, administrator_profile):
+            with self.subTest(role=profile.user.role):
+                with self.assertRaises(TechnicianAssignmentError) as raised:
+                    assign_technician(
+                        actor=administrator,
+                        appointment_id=self.make_appointment(
+                            slot=self.make_slot(), technician=None
+                        ).pk,
+                        technician_profile_id=profile.pk,
+                    )
+                self.assertEqual(raised.exception.code, "invalid_technician")
+
+    def test_unavailable_and_nonexistent_technician_profiles_are_rejected(self):
+        administrator = self.create_administrator()
+        appointment = self.make_appointment(technician=None)
+        self.technician.is_available = False
+        self.technician.save(update_fields=("is_available",))
+
+        for profile_id in (self.technician.pk, 999999, "invalid"):
+            with self.subTest(profile_id=profile_id):
+                with self.assertRaises(TechnicianAssignmentError):
+                    assign_technician(
+                        actor=administrator,
+                        appointment_id=appointment.pk,
+                        technician_profile_id=profile_id,
+                    )
+                appointment.refresh_from_db()
+                self.assertIsNone(appointment.technician_id)
+
+    def test_assignment_requires_domain_administrator_even_with_forged_role_fields(self):
+        appointment = self.make_appointment(technician=None)
+        self.client.force_login(self.owner)
+
+        response = self.client.post(
+            self.assignment_url(appointment),
+            {
+                "technician": str(self.technician.pk),
+                "confirm_assignment": "on",
+                "role": User.Role.ADMINISTRATOR,
+                "is_superuser": "true",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        appointment.refresh_from_db()
+        self.assertIsNone(appointment.technician_id)
 
 
 class OwnerAppointmentViewTests(AppointmentFixtures):

@@ -20,6 +20,9 @@
                     <a href="{% url 'vehicles:vehicle-list' %}">Vehicles</a>
                     <a href="{% url 'appointments:appointment-list' %}">Appointments</a>
                 {% endif %}
+                {% if user.role == "ADMINISTRATOR" %}
+                    <a href="{% url 'appointments:administrator-assignment-list' %}">Technician Assignments</a>
+                {% endif %}
             {% else %}
                 <a href="{% url 'authentication:login' %}">Login</a>
                 <a href="{% url 'authentication:register' %}">Register</a>

@@ -2,7 +2,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.authentication.models import User
-from apps.maintenance.models import ServiceType
+from apps.maintenance.models import ServiceType, TechnicianProfile
 from apps.vehicles.models import Vehicle
 
 from .models import ACTIVE_APPOINTMENT_STATUSES, Appointment, AppointmentStatus, ServiceSlot
@@ -27,6 +27,88 @@ class AppointmentBookingError(Exception):
     def __init__(self, message, code):
         super().__init__(message)
         self.code = code
+
+
+class TechnicianAssignmentError(Exception):
+    """Safe failure raised when an initial Technician assignment is invalid."""
+
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
+def _assignment_id(value, *, label):
+    if isinstance(value, bool) or not (
+        isinstance(value, int)
+        or isinstance(value, str) and value.isascii() and value.isdecimal()
+    ):
+        raise TechnicianAssignmentError(
+            f"The selected {label} is invalid.", code=f"invalid_{label}"
+        )
+    value = int(value)
+    if value <= 0:
+        raise TechnicianAssignmentError(
+            f"The selected {label} is invalid.", code=f"invalid_{label}"
+        )
+    return value
+
+
+def assign_technician(*, actor, appointment_id, technician_profile_id):
+    """Assign one available Technician to an unassigned Appointment.
+
+    Actor identity is supplied by the server from `request.user`; the only
+    Appointment field written is `technician`. The row lock prevents concurrent
+    submissions from replacing an initial assignment.
+    """
+    if (
+        not getattr(actor, "is_authenticated", False)
+        or getattr(actor, "role", None) != User.Role.ADMINISTRATOR
+    ):
+        raise TechnicianAssignmentError(
+            "Only an Administrator can assign a Technician.",
+            code="permission_denied",
+        )
+
+    appointment_id = _assignment_id(appointment_id, label="appointment")
+    technician_profile_id = _assignment_id(
+        technician_profile_id, label="technician"
+    )
+
+    with transaction.atomic():
+        appointment = (
+            Appointment.objects.select_for_update()
+            .filter(pk=appointment_id)
+            .first()
+        )
+        if appointment is None:
+            raise TechnicianAssignmentError(
+                "The selected Appointment is unavailable.",
+                code="appointment_not_found",
+            )
+        if appointment.technician_id is not None:
+            raise TechnicianAssignmentError(
+                "This Appointment already has a Technician assigned.",
+                code="already_assigned",
+            )
+
+        technician = (
+            TechnicianProfile.objects.select_for_update()
+            .filter(
+                pk=technician_profile_id,
+                user__role=User.Role.TECHNICIAN,
+                is_available=True,
+            )
+            .first()
+        )
+        if technician is None:
+            raise TechnicianAssignmentError(
+                "Choose an available Technician account.",
+                code="invalid_technician",
+            )
+
+        appointment.technician = technician
+        appointment.save(update_fields=("technician",))
+        return appointment
 
 
 def _selection_id(value):
