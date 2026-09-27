@@ -4,6 +4,8 @@ from .views import (
     AppointmentBookingView,
     AdministratorAppointmentAssignmentListView,
     AdministratorAppointmentAssignmentView,
+    TechnicianAppointmentDetailView,
+    TechnicianAppointmentListView,
     OwnerAppointmentDetailView,
     OwnerAppointmentListView,
 )
@@ -21,6 +23,16 @@ urlpatterns = [
         "administrator/assignments/<int:appointment_pk>/",
         AdministratorAppointmentAssignmentView.as_view(),
         name="administrator-appointment-assign",
+    ),
+    path(
+        "technician/appointments/",
+        TechnicianAppointmentListView.as_view(),
+        name="technician-appointment-list",
+    ),
+    path(
+        "technician/appointments/<int:pk>/",
+        TechnicianAppointmentDetailView.as_view(),
+        name="technician-appointment-detail",
     ),
     path("", OwnerAppointmentListView.as_view(), name="appointment-list"),
     path("<int:pk>/", OwnerAppointmentDetailView.as_view(), name="appointment-detail"),

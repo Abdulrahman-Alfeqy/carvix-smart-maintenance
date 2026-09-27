@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Assigned Appointments - CARVIX{% endblock %}
+
+{% block content %}
+<h1>Assigned Appointments</h1>
+
+{% if appointments %}
+    <ul>
+        {% for appointment in appointments %}
+            <li>
+                <h2>
+                    <a href="{% url 'appointments:technician-appointment-detail' appointment.pk %}">
+                        Appointment {{ appointment.pk }}
+                    </a>
+                </h2>
+                <p>Vehicle: {{ appointment.vehicle.manufacturer }} {{ appointment.vehicle.model }} ({{ appointment.vehicle.license_plate }})</p>
+                <p>Service: {{ appointment.service_type.name }}</p>
+                <p>Scheduled: {{ appointment.slot.start_time }}</p>
+                <p>Status: {{ appointment.get_status_display }}</p>
+            </li>
+        {% endfor %}
+    </ul>
+{% else %}
+    <p>You have no assigned appointments.</p>
+{% endif %}
+{% endblock %}

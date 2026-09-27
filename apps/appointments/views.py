@@ -6,6 +6,7 @@ from django.urls import reverse_lazy
 from django.views.generic import DetailView, FormView, ListView
 
 from apps.authentication.models import User
+from apps.maintenance.models import TechnicianProfile
 from apps.vehicles.models import Vehicle
 from apps.vehicles.views import OwnerRequiredMixin
 
@@ -78,6 +79,48 @@ class AdministratorAppointmentAssignmentView(
             f"Technician assigned to Appointment {appointment.pk}.",
         )
         return redirect("appointments:administrator-assignment-list")
+
+
+class TechnicianRequiredMixin(UserPassesTestMixin):
+    """Require the Technician role and its corresponding profile."""
+
+    def test_func(self):
+        if self.request.user.role != User.Role.TECHNICIAN:
+            return False
+        try:
+            self.technician_profile = self.request.user.technician_profile
+        except TechnicianProfile.DoesNotExist:
+            return False
+        return True
+
+
+class TechnicianAppointmentQuerysetMixin:
+    """Limit Appointment reads to the authenticated Technician's assignment."""
+
+    def get_queryset(self):
+        return (
+            Appointment.objects.filter(technician=self.technician_profile)
+            .select_related("vehicle", "service_type", "slot")
+        )
+
+
+class TechnicianAppointmentListView(
+    LoginRequiredMixin, TechnicianRequiredMixin, TechnicianAppointmentQuerysetMixin, ListView
+):
+    template_name = "appointments/technician_appointment_list.html"
+    context_object_name = "appointments"
+    login_url = reverse_lazy("authentication:login")
+
+
+class TechnicianAppointmentDetailView(
+    LoginRequiredMixin,
+    TechnicianRequiredMixin,
+    TechnicianAppointmentQuerysetMixin,
+    DetailView,
+):
+    template_name = "appointments/technician_appointment_detail.html"
+    context_object_name = "appointment"
+    login_url = reverse_lazy("authentication:login")
 
 
 class OwnerAppointmentQuerysetMixin:

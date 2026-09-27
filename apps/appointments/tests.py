@@ -16,6 +16,7 @@ from django.db import (
 )
 from django.db.models.deletion import ProtectedError
 from django.test import Client
+from django.test.utils import CaptureQueriesContext
 from unittest import skipIf
 from unittest.mock import patch
 from django.urls import reverse
@@ -889,6 +890,189 @@ class OwnerAppointmentViewTests(AppointmentFixtures):
         appointment.refresh_from_db()
         self.assertEqual(appointment.status, original_status)
         self.assertEqual(Appointment.objects.count(), 1)
+
+
+class TechnicianAppointmentViewTests(AppointmentFixtures):
+    def setUp(self):
+        super().setUp()
+        self.list_url = reverse("appointments:technician-appointment-list")
+
+    def detail_url(self, appointment):
+        return reverse(
+            "appointments:technician-appointment-detail",
+            kwargs={"pk": appointment.pk},
+        )
+
+    def create_technician(self, username):
+        user = User.objects.create_user(
+            username=username,
+            email=f"{username}@example.com",
+            password="test-password",
+            role=User.Role.TECHNICIAN,
+        )
+        return TechnicianProfile.objects.create(user=user, specialization="General")
+
+    def test_anonymous_list_and_detail_redirect_to_login(self):
+        appointment = self.make_appointment()
+        for url in (self.list_url, self.detail_url(appointment)):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 302)
+                self.assertIn(reverse("authentication:login"), response.url)
+
+    def test_only_technician_role_can_access_assigned_endpoints(self):
+        appointment = self.make_appointment()
+        administrator = User.objects.create_user(
+            username="technician-view-admin",
+            email="technician-view-admin@example.com",
+            password="test-password",
+            role=User.Role.ADMINISTRATOR,
+        )
+        for user in (self.owner, administrator):
+            self.client.force_login(user)
+            for url in (self.list_url, self.detail_url(appointment)):
+                with self.subTest(role=user.role, url=url):
+                    self.assertEqual(self.client.get(url).status_code, 403)
+
+        self.client.force_login(self.tech_user)
+        self.assertEqual(self.client.get(self.list_url).status_code, 200)
+        self.assertEqual(self.client.get(self.detail_url(appointment)).status_code, 200)
+
+    def test_technician_without_profile_is_rejected_safely(self):
+        user = User.objects.create_user(
+            username="technician-without-profile",
+            email="technician-without-profile@example.com",
+            password="test-password",
+            role=User.Role.TECHNICIAN,
+        )
+        self.client.force_login(user)
+        self.assertEqual(self.client.get(self.list_url).status_code, 403)
+
+    def test_list_contains_only_current_assignments_in_model_order(self):
+        older = self.make_appointment(notes="current technician older appointment")
+        newer = self.make_appointment(
+            slot=self.make_slot(), notes="current technician newer appointment"
+        )
+        foreign_technician = self.create_technician("other-assigned-technician")
+        foreign = self.make_appointment(
+            slot=self.make_slot(),
+            technician=foreign_technician,
+            notes="foreign technician private appointment",
+        )
+        unassigned = self.make_appointment(
+            slot=self.make_slot(), technician=None, notes="unassigned private appointment"
+        )
+        self.client.force_login(self.tech_user)
+
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context["appointments"]), [newer, older])
+        self.assertContains(response, f"Appointment {newer.pk}")
+        self.assertContains(response, f"Appointment {older.pk}")
+        for excluded in (foreign, unassigned):
+            self.assertNotContains(response, f"Appointment {excluded.pk}")
+            self.assertNotContains(response, excluded.notes)
+
+    def test_list_has_clear_empty_state(self):
+        self.make_appointment(technician=None)
+        self.client.force_login(self.tech_user)
+
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "You have no assigned appointments.")
+        self.assertEqual(list(response.context["appointments"]), [])
+
+    def test_list_uses_one_joined_appointment_query(self):
+        self.make_appointment()
+        self.client.force_login(self.tech_user)
+
+        with CaptureQueriesContext(connection) as captured:
+            response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, 200)
+        appointment_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if 'FROM "appointments_appointment"' in query["sql"]
+        ]
+        self.assertEqual(len(appointment_queries), 1)
+        for table in (
+            '"vehicles_vehicle"',
+            '"maintenance_servicetype"',
+            '"appointments_serviceslot"',
+        ):
+            self.assertIn(table, appointment_queries[0])
+
+    def test_detail_renders_assigned_appointment_safely(self):
+        appointment = self.make_appointment(
+            notes="Service note <script>window.leak = true</script>"
+        )
+        self.client.force_login(self.tech_user)
+
+        response = self.client.get(self.detail_url(appointment))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["appointment"], appointment)
+        self.assertContains(response, appointment.vehicle.license_plate)
+        self.assertContains(response, appointment.service_type.name)
+        self.assertContains(response, "Service note")
+        self.assertContains(response, "&lt;script&gt;window.leak = true&lt;/script&gt;")
+        self.assertNotContains(response, "<script>")
+        self.assertNotContains(response, self.owner.email)
+        self.assertNotContains(response, self.tech_user.email)
+        self.assertNotContains(response, "is_staff")
+        self.assertNotContains(response, "is_superuser")
+
+    def test_detail_shows_fallback_when_notes_are_missing(self):
+        appointment = self.make_appointment(notes="")
+        self.client.force_login(self.tech_user)
+
+        response = self.client.get(self.detail_url(appointment))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No appointment notes.")
+
+    def test_other_technician_unassigned_and_missing_appointments_return_404(self):
+        other_profile = self.create_technician("other-detail-technician")
+        other_appointment = self.make_appointment(
+            slot=self.make_slot(),
+            technician=other_profile,
+            notes="other technician private note",
+        )
+        unassigned = self.make_appointment(slot=self.make_slot(), technician=None)
+        self.client.force_login(self.tech_user)
+
+        for appointment_id in (other_appointment.pk, unassigned.pk, 999999):
+            with self.subTest(appointment_id=appointment_id):
+                response = self.client.get(
+                    reverse(
+                        "appointments:technician-appointment-detail",
+                        kwargs={"pk": appointment_id},
+                    )
+                )
+                self.assertEqual(response.status_code, 404)
+                self.assertNotContains(
+                    response,
+                    "other technician private note",
+                    status_code=404,
+                )
+
+    def test_read_only_endpoints_reject_post_and_get_does_not_mutate(self):
+        appointment = self.make_appointment(status=AppointmentStatus.IN_PROGRESS)
+        status = appointment.status
+        count = Appointment.objects.count()
+        self.client.force_login(self.tech_user)
+
+        for url in (self.list_url, self.detail_url(appointment)):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.post(url).status_code, 405)
+                self.assertEqual(self.client.get(url).status_code, 200)
+
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, status)
+        self.assertEqual(Appointment.objects.count(), count)
 
 
 @skipIf(not is_postgres, "Concurrent booking tests require PostgreSQL row locks")
