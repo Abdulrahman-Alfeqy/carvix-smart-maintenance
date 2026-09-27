@@ -23,6 +23,9 @@
                 {% if user.role == "ADMINISTRATOR" %}
                     <a href="{% url 'appointments:administrator-assignment-list' %}">Technician Assignments</a>
                 {% endif %}
+                {% if user.role == "TECHNICIAN" %}
+                    <a href="{% url 'appointments:technician-appointment-list' %}">Assigned Appointments</a>
+                {% endif %}
             {% else %}
                 <a href="{% url 'authentication:login' %}">Login</a>
                 <a href="{% url 'authentication:register' %}">Register</a>
