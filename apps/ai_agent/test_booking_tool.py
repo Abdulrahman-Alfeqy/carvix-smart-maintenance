@@ -143,7 +143,13 @@ class BookingToolInputTests(BookingToolFixtures):
             },
         )
         self.assertEqual(AgentActionLog.objects.count(), 1)
-        self.assertEqual(AgentActionLog.objects.get().status, AgentActionLog.Status.SUCCESS)
+        log = AgentActionLog.objects.get()
+        self.assertEqual(log.status, AgentActionLog.Status.SUCCESS)
+        self.assertEqual(log.user, self.owner)
+        self.assertEqual(log.tool_name, TOOL_NAME)
+        self.assertEqual(log.arguments, values)
+        self.assertEqual(log.result, result)
+        self.assertGreaterEqual(log.duration_ms, 0)
 
     def test_ai_flag_is_passed_to_creation_without_a_follow_up_update(self):
         original_save = Appointment.save
@@ -326,6 +332,11 @@ class BookingToolOutcomeTests(BookingToolFixtures):
 class ToolDispatcherAuditTests(BookingToolFixtures):
     def test_unexpected_handler_exception_is_contained_and_audited_once(self):
         def broken_handler(*, actor, arguments):
+            Appointment.objects.create(
+                vehicle=self.vehicle,
+                service_type=self.service,
+                slot=self.slot,
+            )
             raise RuntimeError("synthetic secret and database details")
 
         result = self.execute(
@@ -375,6 +386,27 @@ class ToolDispatcherAuditTests(BookingToolFixtures):
             len(invalid_results),
         )
 
+    def test_malformed_result_rolls_back_handler_side_effect_before_failure_audit(self):
+        def side_effect_then_malformed(*, actor, arguments):
+            Appointment.objects.create(
+                vehicle=self.vehicle,
+                service_type=self.service,
+                slot=self.slot,
+            )
+            return {"success": True, "code": "ok"}
+
+        result = self.execute(
+            self.arguments(),
+            handler=side_effect_then_malformed,
+            name="test_registered_tool",
+        )
+
+        self.assertEqual(result["code"], "invalid_tool_result")
+        self.assertFalse(result["success"])
+        self.assertEqual(Appointment.objects.count(), 0)
+        self.assertEqual(AgentActionLog.objects.count(), 1)
+        self.assertEqual(AgentActionLog.objects.get().status, AgentActionLog.Status.FAILURE)
+
     def test_success_and_failure_result_status_must_match_audit(self):
         self.execute()
         self.execute(self.arguments(confirmation=False))
@@ -416,14 +448,61 @@ class ToolDispatcherAuditTests(BookingToolFixtures):
         self.assertEqual(AgentActionLog.objects.count(), 1)
         self.assertEqual(AgentActionLog.objects.get().status, AgentActionLog.Status.FAILURE)
 
-    def test_genuine_audit_store_failure_uses_safe_failure_policy(self):
+    def test_success_audit_failure_rolls_back_booking_and_allows_clean_retry(self):
+        audit_observed_appointment_counts = []
+
+        def fail_success_audit(**kwargs):
+            audit_observed_appointment_counts.append(Appointment.objects.count())
+            raise OperationalError("private database details")
+
+        with patch.object(
+            AgentActionLog.objects,
+            "create",
+            side_effect=fail_success_audit,
+        ) as create_audit:
+            result = self.execute()
+
+        self.assertEqual(create_audit.call_count, 1)
+        self.assertEqual(audit_observed_appointment_counts, [1])
+        self.assertFalse(result["success"])
+        self.assertEqual(result["code"], "internal_error")
+        self.assertEqual(
+            result["message"],
+            "The requested action could not be completed. Please try again later.",
+        )
+        self.assertNotIn("private database details", json.dumps(result))
+        self.assertEqual(Appointment.objects.count(), 0)
+        self.assertEqual(AgentActionLog.objects.count(), 0)
+        self.assertEqual(
+            Appointment.objects.filter(
+                slot=self.slot,
+                status__in=(
+                    AppointmentStatus.PENDING,
+                    AppointmentStatus.CONFIRMED,
+                    AppointmentStatus.IN_PROGRESS,
+                ),
+            ).count(),
+            0,
+        )
+
+        retry_result = self.execute()
+
+        self.assertTrue(retry_result["success"])
+        self.assertEqual(Appointment.objects.count(), 1)
+        self.assertEqual(AgentActionLog.objects.count(), 1)
+        appointment = Appointment.objects.get()
+        self.assertTrue(appointment.booked_by_agent)
+        self.assertEqual(AgentActionLog.objects.get().status, AgentActionLog.Status.SUCCESS)
+
+    def test_failure_audit_store_failure_is_not_retried(self):
         with patch.object(
             AgentActionLog.objects,
             "create",
             side_effect=OperationalError("private database details"),
-        ):
+        ) as create_audit:
             result = self.execute({})
 
+        self.assertEqual(create_audit.call_count, 1)
         self.assertEqual(result["code"], "internal_error")
         self.assertFalse(result["success"])
         self.assertNotIn("private database details", json.dumps(result))
