@@ -13,8 +13,10 @@ from django.utils import timezone
 
 from apps.ai_agent.agent import respond_to_message
 from apps.ai_agent.booking_tool import TOOL_NAME, book_maintenance_appointment
+from apps.ai_agent.maintenance_tool import check_required_maintenance
 from apps.ai_agent.models import AgentActionLog
 from apps.ai_agent.provider import ProviderReply
+from apps.ai_agent.slot_tool import list_available_service_slots
 from apps.ai_agent.tools import TOOL_REGISTRY, _register_tool, execute_tool_request
 from apps.appointments.models import Appointment, AppointmentStatus, ServiceSlot
 from apps.maintenance.models import ServiceType
@@ -103,9 +105,18 @@ class BookingToolFixtures(TestCase):
 
 
 class BookingToolInputTests(BookingToolFixtures):
-    def test_public_registry_contains_only_the_booking_tool(self):
-        self.assertEqual(tuple(TOOL_REGISTRY), (TOOL_NAME,))
+    def test_public_registry_contains_exactly_the_three_approved_tools(self):
+        self.assertEqual(
+            tuple(TOOL_REGISTRY),
+            (
+                "check_required_maintenance",
+                "list_available_service_slots",
+                TOOL_NAME,
+            ),
+        )
         self.assertIs(TOOL_REGISTRY[TOOL_NAME], book_maintenance_appointment)
+        self.assertIs(TOOL_REGISTRY["check_required_maintenance"], check_required_maintenance)
+        self.assertIs(TOOL_REGISTRY["list_available_service_slots"], list_available_service_slots)
 
     def test_registry_rejects_duplicate_names_and_noncallable_handlers(self):
         registry = {"already_registered": lambda **kwargs: {}}

@@ -9,8 +9,11 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from .booking_tool import TOOL_NAME, book_maintenance_appointment
+from .maintenance_tool import check_required_maintenance
 from .models import AgentActionLog
 from .sanitization import sanitize_payload
+from .slot_tool import list_available_service_slots
+from .tool_schemas import TOOL_SCHEMAS
 
 
 logger = logging.getLogger(__name__)
@@ -48,9 +51,18 @@ def _register_tool(registry, name, handler):
     return True
 
 
-# The production allowlist is deliberately explicit and contains one tool.
+# Keep the production allowlist explicit. A duplicate or invalid declaration
+# is a startup error instead of silently replacing an approved handler.
 TOOL_REGISTRY = {}
-_register_tool(TOOL_REGISTRY, TOOL_NAME, book_maintenance_appointment)
+for _name, _handler in (
+    ("check_required_maintenance", check_required_maintenance),
+    ("list_available_service_slots", list_available_service_slots),
+    (TOOL_NAME, book_maintenance_appointment),
+):
+    if not _register_tool(TOOL_REGISTRY, _name, _handler):
+        raise RuntimeError("The AI Tool Registry contains an invalid or duplicate Tool.")
+if set(TOOL_REGISTRY) != set(TOOL_SCHEMAS):
+    raise RuntimeError("The AI Tool Registry and internal Tool schemas do not match.")
 
 
 def _valid_result(result):
