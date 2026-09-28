@@ -3,8 +3,9 @@ from io import StringIO
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.core.management import call_command
-from django.test import TestCase
+from django.core.management import call_command, CommandError
+from django.test import Client, TestCase
+from django.urls import reverse
 from django.utils import timezone
 
 from apps.appointments.models import (
@@ -50,10 +51,14 @@ class DemoSeedCommandTests(TestCase):
             ServiceSlot.objects.filter(
                 appointments__notes__startswith=DEMO_APPOINTMENT_PREFIX
             ).distinct().count(),
-            MaintenanceRecord.objects.filter(notes__startswith=DEMO_RECORD_PREFIX).count(),
+            MaintenanceRecord.objects.filter(
+                appointment__notes__startswith=f"{DEMO_APPOINTMENT_PREFIX}history:"
+            ).count(),
             SparePart.objects.filter(part_number__startswith="DEMO-PART-").count(),
             MaintenancePart.objects.filter(
-                maintenance_record__notes__startswith=DEMO_RECORD_PREFIX
+                maintenance_record__appointment__notes__startswith=(
+                    f"{DEMO_APPOINTMENT_PREFIX}history:"
+                )
             ).count(),
         )
 
@@ -61,7 +66,20 @@ class DemoSeedCommandTests(TestCase):
         output = self.run_seed()
 
         self.assertIn("users=5 (owners=2, technicians=2, administrators=1)", output)
+        self.assertIn("passwords are unusable", output)
         self.assertEqual(self.snapshot(), (5, 2, 3, 4, 6, 6, 3, 3, 2))
+        self.assertEqual(
+            list(
+                MaintenanceRecord.objects.filter(
+                    appointment__notes__startswith=f"{DEMO_APPOINTMENT_PREFIX}history:"
+                ).order_by("service_date").values_list("notes", flat=True)
+            ),
+            [
+                "Tire service is overdue by mileage and date.",
+                "Oil service is exactly due by mileage.",
+                "Brake-fluid service remains within both intervals.",
+            ],
+        )
 
         users = {user.username: user for user in User.objects.filter(username__in=DEMO_USERNAMES)}
         self.assertEqual(
@@ -102,11 +120,17 @@ class DemoSeedCommandTests(TestCase):
             elif model is Appointment:
                 queryset = queryset.filter(notes__startswith=DEMO_APPOINTMENT_PREFIX)
             elif model is MaintenanceRecord:
-                queryset = queryset.filter(notes__startswith=DEMO_RECORD_PREFIX)
+                queryset = queryset.filter(
+                    appointment__notes__startswith=f"{DEMO_APPOINTMENT_PREFIX}history:"
+                )
             elif model is SparePart:
                 queryset = queryset.filter(part_number__startswith="DEMO-PART-")
             elif model is MaintenancePart:
-                queryset = queryset.filter(maintenance_record__notes__startswith=DEMO_RECORD_PREFIX)
+                queryset = queryset.filter(
+                    maintenance_record__appointment__notes__startswith=(
+                        f"{DEMO_APPOINTMENT_PREFIX}history:"
+                    )
+                )
             for instance in queryset:
                 with self.subTest(model=model.__name__, pk=instance.pk):
                     instance.full_clean()
@@ -153,10 +177,106 @@ class DemoSeedCommandTests(TestCase):
     def test_repeated_command_run_is_idempotent(self):
         self.run_seed()
         before = self.snapshot()
+        existing = MaintenanceRecord.objects.get(
+            appointment__notes=f"{DEMO_APPOINTMENT_PREFIX}history:oil_due"
+        )
+        existing.notes = f"{DEMO_RECORD_PREFIX}oil_due"
+        existing.save(update_fields=("notes",))
 
         self.run_seed()
 
         self.assertEqual(self.snapshot(), before)
+        existing.refresh_from_db()
+        self.assertEqual(existing.notes, "Oil service is exactly due by mileage.")
+
+    def test_repeated_command_run_preserves_custom_maintenance_notes(self):
+        self.run_seed()
+        self.run_seed()
+        existing = MaintenanceRecord.objects.get(
+            appointment__notes=f"{DEMO_APPOINTMENT_PREFIX}history:oil_due"
+        )
+        custom_note = "Owner requested a follow-up inspection next visit."
+        existing.notes = custom_note
+        existing.save(update_fields=("notes",))
+
+        self.run_seed()
+
+        existing.refresh_from_db()
+        self.assertEqual(existing.notes, custom_note)
+        owner = User.objects.get(username="demo.owner.one")
+        vehicle = Vehicle.objects.get(license_plate="DEMO-VEH-001")
+        client = Client()
+        client.force_login(owner)
+        response = client.get(reverse("vehicles:vehicle-detail", args=[vehicle.pk]))
+        self.assertContains(response, custom_note)
+
+    def test_repeated_command_run_populates_blank_note_and_keeps_it_stable(self):
+        self.run_seed()
+        existing = MaintenanceRecord.objects.get(
+            appointment__notes=f"{DEMO_APPOINTMENT_PREFIX}history:oil_due"
+        )
+        existing.notes = ""
+        existing.save(update_fields=("notes",))
+
+        self.run_seed()
+        expected_note = "Oil service is exactly due by mileage."
+        existing.refresh_from_db()
+        self.assertEqual(existing.notes, expected_note)
+        after_first_refresh = self.snapshot()
+
+        self.run_seed()
+
+        existing.refresh_from_db()
+        self.assertEqual(existing.notes, expected_note)
+        self.assertEqual(self.snapshot(), after_first_refresh)
+
+    def test_non_exact_marker_like_note_is_preserved(self):
+        self.run_seed()
+        existing = MaintenanceRecord.objects.get(
+            appointment__notes=f"{DEMO_APPOINTMENT_PREFIX}history:oil_due"
+        )
+        custom_note = f"{DEMO_RECORD_PREFIX}oil_due (owner annotation)"
+        existing.notes = custom_note
+        existing.save(update_fields=("notes",))
+
+        self.run_seed()
+
+        existing.refresh_from_db()
+        self.assertEqual(existing.notes, custom_note)
+
+    def test_tagged_appointment_does_not_authorize_mismatched_record_update(self):
+        self.run_seed()
+        existing = MaintenanceRecord.objects.get(
+            appointment__notes=f"{DEMO_APPOINTMENT_PREFIX}history:oil_due"
+        )
+        mismatched_service = ServiceType.objects.get(name="Demo Brake Fluid Service")
+        MaintenanceRecord.objects.filter(pk=existing.pk).update(
+            service_type=mismatched_service
+        )
+        existing.refresh_from_db()
+        original_notes = existing.notes
+
+        with self.assertRaisesMessage(CommandError, "no longer matches its reserved identity"):
+            self.run_seed()
+
+        existing.refresh_from_db()
+        self.assertEqual(existing.service_type, mismatched_service)
+        self.assertEqual(existing.notes, original_notes)
+
+    def test_maintenance_history_hides_seed_markers_and_keeps_seed_notes(self):
+        self.run_seed()
+        owner = User.objects.get(username="demo.owner.one")
+        vehicle = Vehicle.objects.get(license_plate="DEMO-VEH-001")
+        client = Client()
+        client.force_login(owner)
+
+        response = client.get(reverse("vehicles:vehicle-detail", args=[vehicle.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, DEMO_RECORD_PREFIX)
+        self.assertContains(response, "Oil service is exactly due by mileage.")
+        self.assertContains(response, "Brake-fluid service remains within both intervals.")
+        self.assertContains(response, "Tire service is overdue by mileage and date.")
 
     def test_seeded_history_exercises_existing_due_service_calculation(self):
         self.run_seed()
@@ -178,4 +298,5 @@ class DemoSeedCommandTests(TestCase):
 
         owner = User.objects.get(username="demo.owner.one")
         self.assertTrue(owner.check_password(demo_password))
+        self.assertIn("Seeded demo credentials are usable", output.getvalue())
         self.assertNotIn(demo_password, output.getvalue())

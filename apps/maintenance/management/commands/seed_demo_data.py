@@ -18,7 +18,6 @@ from ...services import add_calendar_months
 
 DEMO_PREFIX = "CARVIX_DEMO_SEED:v1:"
 APPOINTMENT_PREFIX = f"{DEMO_PREFIX}appointment:"
-RECORD_PREFIX = f"{DEMO_PREFIX}record:"
 SERVICE_DESCRIPTION_PREFIX = f"{DEMO_PREFIX}service:"
 
 
@@ -38,7 +37,7 @@ class Command(BaseCommand):
             self._future_bookings(users, vehicles, services)
             self._assert_role_profile_integrity(users)
 
-        self.stdout.write(self.style.SUCCESS(self._summary()))
+        self.stdout.write(self.style.SUCCESS(self._summary(password_provided=bool(password))))
 
     def _users(self, password):
         definitions = (
@@ -281,6 +280,7 @@ class Command(BaseCommand):
         records = {}
         for key, service, technician, mileage, service_date, note in definitions:
             appointment_tag = f"{APPOINTMENT_PREFIX}history:{key}"
+            legacy_record_marker = f"{DEMO_PREFIX}record:{key}"
             slot_start = timezone.make_aware(
                 datetime.combine(service_date, time(hour=9))
             )
@@ -307,16 +307,34 @@ class Command(BaseCommand):
                     f"Seed historical appointment {key} no longer matches its reserved identity."
                 )
 
-            record_tag = f"{RECORD_PREFIX}{key}"
-            record = MaintenanceRecord.objects.filter(notes=record_tag).first()
+            record = MaintenanceRecord.objects.filter(appointment=appointment).first()
             if record is None:
-                record = MaintenanceRecord(notes=record_tag)
+                # Upgrade records created by the previous marker-in-notes seed format.
+                record = MaintenanceRecord.objects.filter(notes=legacy_record_marker).first()
+            is_new_record = record is None
+            if record is None:
+                record = MaintenanceRecord()
+            else:
+                expected_record_identity = (
+                    record.vehicle_id == vehicle.pk
+                    and record.service_type_id == service.pk
+                    and record.technician_id == technician.pk
+                    and record.appointment_id == appointment.pk
+                    and record.service_date == service_date
+                    and record.mileage_at_service == mileage
+                )
+                if not expected_record_identity:
+                    raise CommandError(
+                        f"Seed historical record {key} no longer matches its reserved identity."
+                    )
             record.vehicle = vehicle
             record.service_type = service
             record.technician = technician
             record.appointment = appointment
             record.service_date = service_date
             record.mileage_at_service = mileage
+            if is_new_record or not record.notes or record.notes == legacy_record_marker:
+                record.notes = note
             record.full_clean()
             record.save()
             records[key] = record
@@ -346,12 +364,15 @@ class Command(BaseCommand):
         ).exists():
             raise CommandError("A seeded Owner or Administrator has a TechnicianProfile.")
 
-    def _summary(self):
+    def _summary(self, *, password_provided):
+        credential_status = (
+            "Seeded demo credentials are usable because CARVIX_DEMO_PASSWORD was provided."
+            if password_provided
+            else "Seeded account passwords are unusable because CARVIX_DEMO_PASSWORD was not provided."
+        )
         return (
             "Demo data ready: users=5 (owners=2, technicians=2, administrators=1); "
             "technician_profiles=2; vehicles=3; service_types=4; service_slots=6; "
             "appointments=6 (pending=3, historical_completed=3); "
-            "maintenance_records=3; spare_parts=3; maintenance_parts=2. "
-            "Seeded account passwords are unusable unless CARVIX_DEMO_PASSWORD "
-            "was provided in the process environment."
+            f"maintenance_records=3; spare_parts=3; maintenance_parts=2. {credential_status}"
         )
