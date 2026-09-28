@@ -5,7 +5,7 @@ from django.utils import timezone
 
 from apps.authentication.models import User
 from apps.appointments.models import ACTIVE_APPOINTMENT_STATUSES, Appointment
-from apps.maintenance.models import TechnicianProfile
+from apps.maintenance.models import ServiceType, TechnicianProfile
 from apps.vehicles.models import Vehicle
 
 
@@ -15,6 +15,12 @@ CONTEXT_RECORD_LIMIT = 20
 def build_safe_context(user):
     """Return only the authenticated user's role and permitted summaries."""
     context = {"username": user.get_username(), "role": user.role}
+    # Every valid domain role can use the slot Tool, and Owners can also book.
+    # Give the Provider existing service names/IDs without price or description.
+    if user.role in User.Role.values:
+        context["service_types"] = list(
+            ServiceType.objects.order_by("name", "pk").values("id", "name")
+        )
 
     if user.role == User.Role.OWNER:
         now = timezone.now()

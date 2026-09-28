@@ -242,6 +242,47 @@ class MaintenanceToolLoopTests(ToolIntegrationFixtures):
 
 
 class SlotToolLoopTests(ToolIntegrationFixtures):
+    def test_provider_can_select_the_named_service_from_server_context(self):
+        class CatalogSelectingProvider:
+            def __init__(self):
+                self.calls = []
+
+            def generate(self, *, message, system_prompt, context):
+                safe_context = json.loads(json.dumps(context))
+                self.calls.append(safe_context)
+                if len(self.calls) == 1:
+                    selected = next(
+                        item for item in safe_context["service_types"]
+                        if item["name"] == "Integration service"
+                    )
+                    return ProviderReply(
+                        tool_call={
+                            "name": "list_available_service_slots",
+                            "arguments": {"service_type_id": selected["id"]},
+                        }
+                    )
+                return ProviderReply(text="Eligible slots are available for that service.")
+
+        provider = CatalogSelectingProvider()
+
+        result = self.run_fake(
+            provider,
+            message="Find an available slot for Integration service",
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(len(provider.calls), 2)
+        self.assertEqual(
+            provider.calls[0]["service_types"],
+            [{"id": self.service.pk, "name": "Integration service"}],
+        )
+        observation = provider.calls[1]["tool_observations"][0]
+        self.assertTrue(observation["success"])
+        self.assertEqual(
+            observation["data"]["service_type"],
+            {"id": self.service.pk, "name": "Integration service"},
+        )
+
     def test_slot_observation_preserves_plan_017_global_and_preferred_date_contract(self):
         full_slot = self.make_slot(capacity=1, start_time=timezone.now() + timedelta(days=4))
         full_vehicle = self.make_vehicle(self.owner, "INT-FULL")
