@@ -459,7 +459,7 @@ class AiAgentChatTests(AiAgentFixtures):
         part.refresh_from_db()
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["code"], "unsupported_tool")
-        self.assertEqual(TOOL_REGISTRY, {})
+        self.assertEqual(tuple(TOOL_REGISTRY), ("book_maintenance_appointment",))
         self.assertEqual(appointment.status, original_status)
         self.assertEqual(part.quantity, 10)
         self.assertEqual(MaintenanceRecord.objects.count(), 0)
@@ -519,6 +519,7 @@ class AiAgentChatTests(AiAgentFixtures):
             "os.system", {"command": "unsafe"}, actor=self.owner,
             registry={"allowed_test_tool": lambda **kwargs: executed.append(kwargs) or {
                 "success": True, "code": "ok", "message": "done", "data": None,
+                "errors": None,
             }},
         )
         self.assertEqual(result["code"], "unsupported_tool")
@@ -528,6 +529,7 @@ class AiAgentChatTests(AiAgentFixtures):
             "allowed_test_tool", {"value": "safe"}, actor=self.owner,
             registry={"allowed_test_tool": lambda **kwargs: executed.append(kwargs) or {
                 "success": True, "code": "ok", "message": "done", "data": None,
+                "errors": None,
             }},
         )
         self.assertTrue(success["success"])
