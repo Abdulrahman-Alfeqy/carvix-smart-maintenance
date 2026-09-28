@@ -54,7 +54,7 @@ Baseline inspected on branch `feature/ai-read-tools`, HEAD `767630064621d0bc4f72
 
 ### Plan 013/014 result and audit boundaries
 
-- Plan 014's `ChatResult` and JSON endpoint use `success`, `code`, `message`, `data`, and `errors`; its explicit `TOOL_REGISTRY` is empty. `execute_tool_request(name, arguments, *, actor, registry=None)` calls registered handlers with `handler(actor=actor, arguments=arguments)` and checks `success`, `code`, `message`, and nullable-dict `data`. It does not currently require or validate `errors`, nor record audit rows. Plan 017 handlers should return the Plan 014/SRS five-key shape, with `errors` present as an object or `null`, and remain directly callable with this signature. No tool registration or changes to the central dispatcher are in scope.
+- Plan 014's `ChatResult` and JSON endpoint use `success`, `code`, `message`, `data`, and `errors`; its initial explicit `TOOL_REGISTRY` was empty. Plan 016 subsequently registered `book_maintenance_appointment` with central audit handling. `execute_tool_request(name, arguments, *, actor, registry=None)` calls registered handlers with `handler(actor=actor, arguments=arguments)` and validates the five-key result contract. Plan 017 handlers return that contract and remain directly callable with this signature. They are not registered by Plan 017.
 - `apps.ai_agent.models.AgentActionLog` requires `user`, `tool_name`, JSON-object `arguments` and `result`, `status` (`SUCCESS`/`FAILURE` matching `result.success`), nonnegative integer `duration_ms`, and auto-created `created_at`. `save()` calls `full_clean()`, which recursively sanitizes both JSON payloads using `apps.ai_agent.sanitization.sanitize_payload`; sensitive-key values are redacted, unsupported values/non-string keys and non-object top-level payloads are rejected. The User relation is protected. This model and its migration already exist.
 - FR-31 audit recording belongs at the central execution boundary, not inside either handler: that boundary sees each attempted invocation (including pre-handler denial/validation), owns consistent timing/status/result capture, and prevents duplicate log rows if a handler is reused. Plan 017 excludes that boundary and the registry, so handlers must not create AgentActionLog records themselves. Direct handler tests are not production tool-execution integration. Until a later approved integration adds central logging before registration, these tools must remain unregistered/unavailable through chat and no claim is made that execution attempts are logged.
 
@@ -117,7 +117,7 @@ Every handler returns exactly the safe JSON-oriented contract used by the SRS an
 
 - Both tools issue reads only. Tests must assert no Appointment, MaintenanceRecord, AgentActionLog, status, inventory, or other application data is created or changed by direct handler calls, including invalid/denied paths.
 - Do not log to AgentActionLog inside handlers. No central integration is included and direct test invocation is not a production execution path.
-- Do not claim these handlers are reachable from Plan 014 chat while the production registry remains empty.
+- Do not claim these handlers are reachable from Plan 014 chat; the production registry contains the Plan 016 booking Tool, and these read handlers remain unregistered.
 
 ## Proposed Files and Responsibilities
 
@@ -150,7 +150,7 @@ Use the expected separate `maintenance_tool.py` and `slot_tool.py` modules. Thes
 ### Shared / regression
 
 - Both handlers return all five result keys with correct types and safe JSON-compatible values for success and failure.
-- Direct invocation creates no AgentActionLog or business writes. Keep `TOOL_REGISTRY == {}`; current unregistered-name rejection remains intact.
+- Direct invocation creates no AgentActionLog or business writes. Keep both Plan 017 read handlers absent from the production registry; the existing Plan 016 booking Tool remains its sole entry and unregistered names remain rejected.
 - Existing due-service and slot-selector tests remain unchanged and continue to exercise their underlying services/selectors.
 - Tests must not imply end-to-end agent execution or audit recording.
 
@@ -171,7 +171,7 @@ Acceptance is satisfied only when both handlers are independently importable/dir
 
 Keep due calculations and slot eligibility in the tested services/selectors; handlers do authorization, input validation, and serialization only. Leave central registration and audit integration deferred.
 
-Advantages: reuses tested rules, keeps the tools independently testable, avoids duplicated business logic/schema changes, and respects Plan 014's explicit empty registry. Disadvantages: handlers cannot be invoked by production chat until registry and audit integration are separately approved and completed.
+Advantages: reuses tested rules, keeps the tools independently testable, and avoids duplicated business logic/schema changes. Disadvantages: handlers cannot be invoked by production chat until registry and audit integration are separately approved and completed.
 
 ### Option B — Put domain calculations and authorization in one combined module or central dispatcher
 
@@ -179,14 +179,14 @@ Advantages: may centralize common result handling. Disadvantages: duplicates exi
 
 ## Recommended Approach
 
-Choose Option A. The repository already has stable, tested, HTTP-independent domain interfaces for due-service calculation and slot discovery. Thin modules should own the actor/argument boundary and adapt their outputs to SRS JSON results. Keep central registry/logging unchanged; no production execution is possible or claimed until a later plan adds FR-31 audit integration at the central boundary.
+Choose Option A. The repository already has stable, tested, HTTP-independent domain interfaces for due-service calculation and slot discovery. Thin modules should own the actor/argument boundary and adapt their outputs to SRS JSON results. Keep the Plan 016 central registry/logging unchanged; no production execution of these read handlers is possible or claimed until a later plan adds registration and FR-31 audit integration at the central boundary.
 
 ## Implementation Steps
 
 1. Add the focused read-tool test module and define direct-call fixtures for all three roles, owned/foreign Vehicles, ServiceTypes, due results, and eligible slots.
 2. Implement the Owner-only maintenance handler: strict argument validation, scoped Vehicle resolution, service reuse, minimal JSON serialization, and safe structured failures.
 3. Implement the SRS-role-authorized slot handler: strict ServiceType/date validation (including malformed and invalid calendar-date rejection), one unchanged selector call, remaining-capacity serialization, and safe structured failures. Do not filter results by preferred date in Plan 017.
-4. Run focused tool tests, existing maintenance/slot-selector regression tests, AI-agent tests, Django check, migration check, full suite, and whitespace/diff boundary review; verify registry stays empty and migration state is unchanged.
+4. Run focused tool tests, existing maintenance/slot-selector regression tests, AI-agent tests, Django check, migration check, full suite, and whitespace/diff boundary review; verify neither read handler is registered and migration state is unchanged.
 5. Complete the Implementation Report and change plan status only after required validation passes. Do not register tools or claim audit/end-to-end execution.
 
 ## Test Plan and Validation Sequence
@@ -198,7 +198,7 @@ Required checks include:
 - Authorization and foreign Vehicle isolation for maintenance.
 - Slot role matrix, ServiceType existence, strict date wire format and invalid-calendar-date rejection, and stable ordering. Test that a valid `preferred_date` does not narrow selector results in Plan 017. Do not test or invent timezone-based matching.
 - Safe serialization, all five result keys, no side effects, no per-slot count queries, and no unexpected exception leakage.
-- Existing due-service and selector tests plus Plan 014 structured-result/empty-registry regression tests.
+- Existing due-service and selector tests plus structured-result and unregistered-name regression tests.
 - `python manage.py check`; `python manage.py makemigrations --check`; full PostgreSQL test suite; `git diff --check`; migration-directory/diff inspection.
 
 ## Migration and Environment Impact
@@ -210,7 +210,7 @@ MIGRATIONS_EXPECTED: NO. Existing Vehicle, ServiceType, MaintenanceRecord, Servi
 - Plan 006 is IMPLEMENTED and supplies the due-service service/results; reuse its exact interface and preserve its read-only calculation semantics.
 - Plan 007 is IMPLEMENTED and supplies the available-slot selector and exact eligibility definition (`is_active`, `start_time > timezone.now()`, remaining capacity counted using active statuses). Do not reimplement its query or alter its no-service-relation rule.
 - Plan 013 is IMPLEMENTED and supplies AgentActionLog plus recursive JSON sanitization. Its schema is not changed; this plan does not call it because audit belongs in the deferred central execution boundary.
-- Plan 014 is IMPLEMENTED and leaves the production registry explicitly empty. Do not register the tools or modify Plan 014-owned central AI files in this task.
+- Plan 014 initially left the production registry empty; Plan 016 now registers the audited booking Tool. Do not register the Plan 017 read tools or modify central AI dispatch in this task.
 - No dependency on Plan 015 frontend/docs work. No models or migrations are required.
 
 ## Open Questions
