@@ -84,7 +84,25 @@ With PostgreSQL running, dependencies installed, migrations applied, and local `
 python manage.py runserver
 ```
 
-Open `http://127.0.0.1:8000/`. Sign in and use the role-aware navigation/profile entry points. When Gemini is configured, authenticated Chat can request the three registered CARVIX Tools; Django validates and executes each request through the central Tool Registry.
+Open `http://127.0.0.1:8000/accounts/login/` to sign in; a successful sign-in redirects to the profile page and its role-aware entry points. When Gemini is configured, authenticated Chat can request the three registered CARVIX Tools; Django validates and executes each request through the central Tool Registry.
+
+## Manual and AI-assisted workflows
+
+The manual Owner workflow supports vehicle management, maintenance history and due-service guidance, active-slot discovery, and appointment booking. The Administrator assigns an available Technician; that Technician can start and complete assigned work, record parts used, and update maintenance history. Django views, forms, selectors, and services enforce these rules independently of the AI Provider.
+
+The authenticated assistant exposes exactly these Tools through the allowlisted Django Registry:
+
+| Tool | Purpose | Access |
+| --- | --- | --- |
+| `check_required_maintenance` | Check due or overdue maintenance for one owned vehicle. | Owner's own vehicles |
+| `list_available_service_slots` | List active future slots that still have capacity. | Owner, Technician, Administrator |
+| `book_maintenance_appointment` | Book for an owned vehicle after explicit confirmation. | Owner only |
+
+The assistant receives the configured service names and IDs needed to select a valid service, plus role-scoped context. It cannot query the database or execute Tools itself. Django validates every call, binds it to the signed-in user, enforces permissions, and records registered Tool attempts. Gemini must be configured for live Chat; without a key, Chat returns a safe unavailable response and manual workflows continue to work. The SDK is installed with `python -m pip install -r requirements.txt`.
+
+Slot results include globally eligible slots because the current data model does not associate slots with a service type. The optional `preferred_date` Tool argument is validated but does not filter results. Chat history is request-local and is not persisted. Owner appointment cancellation is deferred (FR-15 is Should and its eligibility rules are not defined). See [`docs/final-traceability.md`](docs/final-traceability.md) for the requirement-to-code map and [`docs/demo-runbook.md`](docs/demo-runbook.md) for the optional read-only AI demo.
+
+Other excluded scope remains out of the MVP: payments, maps/GPS, mobile or voice clients, WebSockets, RAG/embeddings/vector storage, multiple agents, predictive ML, multiple service-center branches, and supplier/financial systems.
 
 ## Tests and checks
 
@@ -127,6 +145,7 @@ The current Django applications are:
 - Supporting journeys: [`docs/user-journeys.md`](docs/user-journeys.md)
 - Demo dataset instructions: [`docs/demo-seed-data.md`](docs/demo-seed-data.md)
 - Demo script and checklists: [`docs/demo-runbook.md`](docs/demo-runbook.md)
+- Final SRS traceability: [`docs/final-traceability.md`](docs/final-traceability.md)
 - Shared development instructions: [`AGENTS.md`](AGENTS.md)
 - Task plans: [`.agents/plans/`](.agents/plans/)
 - Shared templates: [`templates/`](templates/)

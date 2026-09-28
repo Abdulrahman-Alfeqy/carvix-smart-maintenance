@@ -256,6 +256,28 @@ class AiAgentFixtures(TestCase):
 
 
 class AiAgentContextTests(AiAgentFixtures):
+    def test_service_catalog_gives_slot_capable_roles_only_existing_ids_and_names(self):
+        second_service = ServiceType.objects.create(
+            name="Wheel alignment", description="Private admin description",
+            interval_km=5000, interval_months=12, duration_minutes=45,
+            price=Decimal("99.00"),
+        )
+
+        for user in (self.owner, self.technician_user, self.administrator):
+            with self.subTest(role=user.role):
+                service_types = build_safe_context(user)["service_types"]
+                self.assertEqual(
+                    service_types,
+                    [
+                        {"id": self.service.pk, "name": "Chat service"},
+                        {"id": second_service.pk, "name": "Wheel alignment"},
+                    ],
+                )
+                self.assertEqual(set(service_types[0]), {"id", "name"})
+                self.assertNotIn("Private admin description", json.dumps(service_types))
+                self.assertNotIn("99.00", json.dumps(service_types))
+                self.assertEqual(json.loads(json.dumps(service_types)), service_types)
+
     def test_owner_context_contains_only_owned_vehicle_and_upcoming_appointment_summaries(self):
         own_appointment = self.make_appointment(self.owner_vehicle)
         other_appointment = self.make_appointment(self.other_vehicle)
@@ -299,12 +321,13 @@ class AiAgentContextTests(AiAgentFixtures):
         )
         self.assertNotIn("foreign appointment note", json.dumps(context))
 
-    def test_administrator_context_is_bounded_to_counts(self):
+    def test_administrator_context_has_counts_and_minimal_service_catalog(self):
         self.make_appointment(self.owner_vehicle)
 
         context = build_safe_context(self.administrator)
 
         self.assertEqual(context["appointment_counts_by_status"][AppointmentStatus.PENDING], 1)
+        self.assertEqual(context["service_types"], [{"id": self.service.pk, "name": self.service.name}])
         self.assertNotIn("vehicles", context)
         self.assertNotIn("appointments", context)
         self.assertEqual(json.loads(json.dumps(context)), context)
