@@ -459,7 +459,14 @@ class AiAgentChatTests(AiAgentFixtures):
         part.refresh_from_db()
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["code"], "unsupported_tool")
-        self.assertEqual(tuple(TOOL_REGISTRY), ("book_maintenance_appointment",))
+        self.assertEqual(
+            set(TOOL_REGISTRY),
+            {
+                "check_required_maintenance",
+                "list_available_service_slots",
+                "book_maintenance_appointment",
+            },
+        )
         self.assertEqual(appointment.status, original_status)
         self.assertEqual(part.quantity, 10)
         self.assertEqual(MaintenanceRecord.objects.count(), 0)

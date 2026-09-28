@@ -303,8 +303,15 @@ class ListAvailableServiceSlotsToolTests(ReadToolFixtures):
 
 
 class ReadToolBoundaryTests(ReadToolFixtures):
-    def test_read_tools_remain_unregistered_beside_the_booking_tool(self):
-        self.assertEqual(tuple(TOOL_REGISTRY), (TOOL_NAME,))
+    def test_registry_contains_all_three_approved_tools_with_exact_handlers(self):
+        self.assertEqual(
+            tuple(TOOL_REGISTRY),
+            (
+                "check_required_maintenance",
+                "list_available_service_slots",
+                TOOL_NAME,
+            ),
+        )
         self.assertIs(TOOL_REGISTRY[TOOL_NAME], book_maintenance_appointment)
-        self.assertNotIn("check_required_maintenance", TOOL_REGISTRY)
-        self.assertNotIn("list_available_service_slots", TOOL_REGISTRY)
+        self.assertIs(TOOL_REGISTRY["check_required_maintenance"], check_required_maintenance)
+        self.assertIs(TOOL_REGISTRY["list_available_service_slots"], list_available_service_slots)
