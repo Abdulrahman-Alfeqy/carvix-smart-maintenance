@@ -40,7 +40,9 @@ If PowerShell blocks activation, run the virtual-environment interpreter directl
 
 3. Set `SECRET_KEY`, `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` in `.env` to match your local setup. `POSTGRES_HOST` and `POSTGRES_PORT` default to `localhost` and `5432` in the Django settings. `ALLOWED_HOSTS` defaults to `localhost,127.0.0.1`.
 
-4. For local `runserver` use only, set `DEBUG=True` in `.env` so Django's development static-file handler serves the stylesheet. Keep `DEBUG=False` for deployed environments and configure a production static-file server there. Never commit `.env` or reuse local demo secrets in production; `.env` is ignored by Git.
+4. To enable the authenticated CARVIX assistant, set `GEMINI_API_KEY` in the server-side `.env` using a key from [Google AI Studio](https://aistudio.google.com/app/apikey). `GEMINI_MODEL` defaults to the SRS model alias `gemini-flash-latest`; `GEMINI_TIMEOUT_SECONDS` defaults to 20 and accepts values from 1 through 30. Keep the key out of source control, browser code, screenshots, and shared logs. Without a key, Chat returns a safe unavailable response while manual booking and other non-AI workflows remain available.
+
+5. For local `runserver` use only, set `DEBUG=True` in `.env` so Django's development static-file handler serves the stylesheet. Keep `DEBUG=False` for deployed environments and configure a production static-file server there. Never commit `.env` or reuse local demo secrets in production; `.env` is ignored by Git.
 
 ## Migrations
 
@@ -82,7 +84,7 @@ With PostgreSQL running, dependencies installed, migrations applied, and local `
 python manage.py runserver
 ```
 
-Open `http://127.0.0.1:8000/`. The current app provides named account, vehicle, and appointment routes; sign in and use the role-aware navigation/profile entry points. AI tool execution and LLM functionality are not represented as available by these setup instructions.
+Open `http://127.0.0.1:8000/`. Sign in and use the role-aware navigation/profile entry points. When Gemini is configured, authenticated Chat can request the three registered CARVIX Tools; Django validates and executes each request through the central Tool Registry.
 
 ## Tests and checks
 
@@ -114,7 +116,7 @@ The current Django applications are:
 - `apps.maintenance` — service definitions, maintenance history/due-service logic, and demo seed command.
 - `apps.appointments` — slots, Owner booking and appointment pages, assignment, Technician workflow.
 - `apps.inventory` — spare parts and maintenance usage records.
-- `apps.ai_agent` — AgentActionLog persistence and Administrator inspection foundation. An empty log is possible until an approved workflow creates entries.
+- `apps.ai_agent` — authenticated Chat, safe role-scoped context, the bounded Gemini Provider/Tool loop, central AgentActionLog recording, and Administrator inspection.
 
 ## Documentation and project paths
 

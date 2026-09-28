@@ -223,6 +223,10 @@ def _parse_reply(provider_reply):
     request = provider_reply.tool_call
     if not isinstance(request, dict) or set(request) != {"name", "arguments"}:
         return "invalid", None
+    if provider_reply.text.strip():
+        # A single Provider turn cannot be both a user-facing completion and
+        # an action request. Keep that ambiguous output away from dispatch.
+        return "invalid", None
     if not isinstance(request["name"], str) or not request["name"]:
         return "invalid", None
     return "tool", request
