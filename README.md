@@ -42,7 +42,7 @@ If PowerShell blocks activation, run the virtual-environment interpreter directl
 
 4. To enable the authenticated CARVIX assistant, set `GEMINI_API_KEY` in the server-side `.env` using a key from [Google AI Studio](https://aistudio.google.com/app/apikey). `GEMINI_MODEL` defaults to the SRS model alias `gemini-flash-latest`; `GEMINI_TIMEOUT_SECONDS` defaults to 20 and accepts values from 1 through 30. Keep the key out of source control, browser code, screenshots, and shared logs. Without a key, Chat returns a safe unavailable response while manual booking and other non-AI workflows remain available.
 
-5. For local `runserver` use only, set `DEBUG=True` in `.env` so Django's development static-file handler serves the stylesheet. Keep `DEBUG=False` for deployed environments and configure a production static-file server there. Never commit `.env` or reuse local demo secrets in production; `.env` is ignored by Git.
+5. For local `runserver` use only, set `DEBUG=True` in `.env` so Django's development static-file handler serves project assets. The project-level `static/` directory is registered for discovery; `collectstatic` gathers those assets into `STATIC_ROOT` for deployment. Keep `DEBUG=False` in deployed environments and configure a production static-file server or equivalent there; Django's development static handler is not a production serving solution. Never commit `.env` or reuse local demo secrets in production; `.env` is ignored by Git.
 
 ## Migrations
 
@@ -150,8 +150,7 @@ The current Django applications are:
 - Task plans: [`.agents/plans/`](.agents/plans/)
 - Shared templates: [`templates/`](templates/)
 - General stylesheet: [`static/css/carvix.css`](static/css/carvix.css)
-- Django app static-file discovery copy: [`apps/authentication/static/css/carvix.css`](apps/authentication/static/css/carvix.css)
 
-The stylesheet is mirrored under the installed authentication app because the repository-root `static/` directory is not listed in `STATICFILES_DIRS`. Keep the two stylesheet files identical; this avoids a settings change while allowing Django's app static-file finder and `collectstatic` to discover the asset.
+Project assets live under `static/` and are discovered through `STATICFILES_DIRS`; `STATIC_ROOT` is the `staticfiles/` destination populated by `collectstatic`. Local `DEBUG=True` runserver behavior is for development, while deployments with `DEBUG=False` must serve collected assets through a configured static-file server or equivalent.
 
 The DOCX SRS is authoritative. The architecture, ERD, and journey files are supporting references and may contain historical details; where they conflict with the SRS or current implementation, do not treat them as the system contract.
