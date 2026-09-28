@@ -371,11 +371,14 @@ def _selection_id(value):
     return value
 
 
-def book_appointment(*, actor, vehicle_id, service_type_id, slot_id):
-    """Create an Owner's manual appointment after transactional revalidation.
+def book_appointment(
+    *, actor, vehicle_id, service_type_id, slot_id, booked_by_agent=False
+):
+    """Create an Owner appointment after transactional revalidation.
 
     `actor` must be the authenticated server-side user (normally request.user).
-    No identity or protected appointment fields are accepted from the payload.
+    `booked_by_agent` is a trusted server-only keyword; ordinary manual callers
+    omit it and retain the False default. No protected fields come from payloads.
     """
     if not getattr(actor, "is_authenticated", False) or getattr(actor, "role", None) != User.Role.OWNER:
         raise AppointmentBookingError(
@@ -444,7 +447,7 @@ def book_appointment(*, actor, vehicle_id, service_type_id, slot_id):
                 slot=slot,
                 status=AppointmentStatus.PENDING,
                 technician=None,
-                booked_by_agent=False,
+                booked_by_agent=booked_by_agent,
             )
     except IntegrityError as error:
         # The atomic block has rolled back before translating the known duplicate race.

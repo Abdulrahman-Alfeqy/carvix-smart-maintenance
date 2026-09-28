@@ -12,6 +12,7 @@ from apps.appointments.models import Appointment, ServiceSlot
 from apps.maintenance.models import ServiceType
 from apps.vehicles.models import Vehicle
 
+from .booking_tool import TOOL_NAME, book_maintenance_appointment
 from .maintenance_tool import check_required_maintenance
 from .models import AgentActionLog
 from .slot_tool import list_available_service_slots
@@ -302,5 +303,8 @@ class ListAvailableServiceSlotsToolTests(ReadToolFixtures):
 
 
 class ReadToolBoundaryTests(ReadToolFixtures):
-    def test_central_registry_remains_empty(self):
-        self.assertEqual(TOOL_REGISTRY, {})
+    def test_read_tools_remain_unregistered_beside_the_booking_tool(self):
+        self.assertEqual(tuple(TOOL_REGISTRY), (TOOL_NAME,))
+        self.assertIs(TOOL_REGISTRY[TOOL_NAME], book_maintenance_appointment)
+        self.assertNotIn("check_required_maintenance", TOOL_REGISTRY)
+        self.assertNotIn("list_available_service_slots", TOOL_REGISTRY)
