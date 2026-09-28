@@ -420,7 +420,11 @@ class AiAgentChatTests(AiAgentFixtures):
 
     def test_provider_unavailable_and_exception_are_safe(self):
         self.client.force_login(self.owner)
-        response = self.post_json({"message": "Help"})
+        with patch(
+            "apps.ai_agent.agent.get_provider",
+            side_effect=ProviderUnavailable,
+        ):
+            response = self.post_json({"message": "Help"})
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["code"], "provider_unavailable")
 

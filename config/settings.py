@@ -19,6 +19,12 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
+# Optional Gemini Developer API configuration. A missing key leaves the
+# Provider disabled while all Django and manual workflows remain available.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest").strip() or "gemini-flash-latest"
+GEMINI_TIMEOUT_SECONDS = os.getenv("GEMINI_TIMEOUT_SECONDS", "20").strip() or "20"
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
