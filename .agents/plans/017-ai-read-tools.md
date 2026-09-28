@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: APPROVED
+- Status: IMPLEMENTED
 - Related issue: N/A
 - Owner: TBD
 - Reviewer: TBD
@@ -229,4 +229,12 @@ Implementation must not begin while Status is `DRAFT` or Decision is `PENDING`.
 
 ## Implementation Report
 
-Not implemented. This document records discovery and proposed scope only.
+- Summary: Implemented the independently callable, read-only `check_required_maintenance` and `list_available_service_slots` handlers. Both return structured five-field results and adapt the existing domain services/selectors without duplicating maintenance or slot-availability logic.
+- Files created by Plan 017: `apps/ai_agent/maintenance_tool.py`, `apps/ai_agent/slot_tool.py`, and `apps/ai_agent/test_read_tools.py`.
+- Maintenance handler: `check_required_maintenance` requires an authenticated OWNER, resolves the Vehicle using an owner-scoped query, and calls the existing `get_vehicle_maintenance_overview` service. It serializes only the permitted maintenance summary and safely rejects missing or foreign-owned vehicles.
+- Slot handler: `list_available_service_slots` applies the approved role checks, validates the ServiceType and optional date, and reuses `get_available_service_slots`. It returns globally eligible slots because the current model has no ServiceType-to-Slot relation; a valid preferred date is validated but does not filter results.
+- Read-only boundary: Neither handler creates an Appointment, reserves Slot capacity, or mutates a Vehicle, MaintenanceRecord, MaintenancePart, SparePart, inventory quantity, or ServiceSlot. Both handlers remain independently implemented and directly testable. They return JSON-safe results with exactly `success`, `code`, `message`, `data`, and `errors`.
+- Registry and Plan 016 compatibility: The central production Registry contains only the audited `book_maintenance_appointment` Tool. Plan 017 read Tools remain unregistered; their central registration and execution audit integration are deferred to a later approved integration plan. The combined registry-boundary test verifies this relationship. No duplicate audit logging was added.
+- Models and migrations: Plan 017 introduced no Model or Migration changes.
+- Validation on the synchronized branch: Combined AI Agent tests passed 72/72; Appointments, Authentication, Vehicles, and Maintenance tests passed 222/222; Demo Seed Data tests passed 4/4; the complete PostgreSQL suite passed 301/301. Django check passed, `makemigrations --check` reported no changes, and `git diff --check` passed. These are combined-branch counts, validated on `feature/ai-booking-tool` at synchronized HEAD `ccfd22f`; they are not standalone Plan 017 test counts.
+- Git history: Plan 017 implementation commit `2ea5fd8` was merged into `main` by `9811ea0`. The compatibility correction in `ccfd22f` updated the Registry boundary expectation and plan wording while preserving the read Tools as unregistered.
