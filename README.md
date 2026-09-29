@@ -139,10 +139,10 @@ The current Django applications are:
 ## Documentation and project paths
 
 - Authoritative requirements: [`docs/CARVIX_SRS_Group6.docx`](docs/CARVIX_SRS_Group6.docx)
-- Documentation source policy: [`docs/README.md`](docs/README.md)
-- Supporting architecture: [`docs/architecture.md`](docs/architecture.md)
-- Supporting ERD: [`docs/erd.md`](docs/erd.md) and [`docs/ERD.jpeg`](docs/ERD.jpeg)
-- Supporting journeys: [`docs/user-journeys.md`](docs/user-journeys.md)
+- Documentation index and source policy: [`docs/README.md`](docs/README.md)
+- Final approved system architecture diagram: [`docs/system architecture.jpeg`](docs/system%20architecture.jpeg)
+- Final approved ERD diagram: [`docs/ERD.jpeg`](docs/ERD.jpeg)
+- Final approved workflow diagram: [`docs/Workflow diagram.jpeg`](docs/Workflow%20diagram.jpeg)
 - Demo dataset instructions: [`docs/demo-seed-data.md`](docs/demo-seed-data.md)
 - Demo script and checklists: [`docs/demo-runbook.md`](docs/demo-runbook.md)
 - Final SRS traceability: [`docs/final-traceability.md`](docs/final-traceability.md)
@@ -153,4 +153,4 @@ The current Django applications are:
 
 Project assets live under `static/` and are discovered through `STATICFILES_DIRS`; `STATIC_ROOT` is the `staticfiles/` destination populated by `collectstatic`. Local `DEBUG=True` runserver behavior is for development, while deployments with `DEBUG=False` must serve collected assets through a configured static-file server or equivalent.
 
-The DOCX SRS is authoritative. The architecture, ERD, and journey files are supporting references and may contain historical details; where they conflict with the SRS or current implementation, do not treat them as the system contract.
+The DOCX SRS is the authoritative requirements document, and the three JPEG files above are the final approved diagrams. Historical Markdown diagram drafts were removed because they conflicted with the SRS, the approved diagrams, and the current implementation; do not reintroduce requirements, roles, entities, fields, Tools, or workflows that are absent from the SRS and the repository.

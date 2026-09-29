@@ -2,31 +2,45 @@
 
 ## Authoritative SRS
 
-The only authoritative project requirements document is:
+The highest authority for CARVIX requirements is:
 
-`docs/CARVIX_SRS_Group6.docx`
+- [`CARVIX_SRS_Group6.docx`](CARVIX_SRS_Group6.docx)
 
-All implementation plans, model designs, migrations, tests, RBAC
-decisions, user journeys, agent tools, and acceptance criteria must be
-validated against this document.
+All model designs, migrations, tests, RBAC decisions, agent Tools, and
+acceptance criteria must be validated against this document.
 
-## Supporting Documentation
+## Final Approved Diagrams
 
-The following files provide supporting diagrams and technical context.
-They must not override the authoritative SRS:
+The final approved design diagrams are:
 
-- `docs/architecture.md`
-- `docs/erd.md`
-- `docs/user-journeys.md`
-- Diagram images stored in `docs/`
+- [`system architecture.jpeg`](system%20architecture.jpeg)
+- [`ERD.jpeg`](ERD.jpeg)
+- [`Workflow diagram.jpeg`](Workflow%20diagram.jpeg)
 
-If supporting documentation conflicts with
-`docs/CARVIX_SRS_Group6.docx`, the DOCX SRS takes precedence.
+## Delivery Documents
 
-## Obsolete Document
+The current delivery documents are:
 
-`docs/carvix-srs-v2.md` was an earlier draft and was removed to prevent
-conflicting implementation decisions.
+- [`demo-runbook.md`](demo-runbook.md)
+- [`demo-seed-data.md`](demo-seed-data.md)
+- [`final-traceability.md`](final-traceability.md)
+
+The project root [`README.md`](../README.md) contains setup, PostgreSQL,
+migration, testing, Gemini configuration, and server-startup instructions.
+
+## Removed Historical Drafts
+
+Earlier Markdown diagram drafts were removed because they conflicted with
+the authoritative SRS, the final approved diagrams, and the current
+repository implementation. They included superseded role names, tool
+counts, agent-round limits, and speculative schema elements.
+
+Do not use removed drafts, Git history, or unofficial notes to introduce
+requirements, roles, entities, fields, Tools, or workflows that are absent
+from `CARVIX_SRS_Group6.docx` and the current repository.
+
+Where any remaining material conflicts with the DOCX SRS, the DOCX SRS
+takes precedence.
 
 ## Planning Rule
 
